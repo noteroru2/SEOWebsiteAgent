@@ -8,7 +8,7 @@ try {
   const demo = await db
     .select({ id: sites.id })
     .from(sites)
-    .where(eq(sites.url, 'https://example.com'))
+    .where(eq(sites.url, 'https://example.com/'))
     .limit(1);
   if (!demo.length) await createSite({ name: 'Demo Site', url: 'https://example.com' }, db);
   console.log('Database migrations applied.');

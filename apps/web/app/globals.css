@@ -186,6 +186,80 @@ button {
   font-weight: 700;
   cursor: pointer;
 }
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+button.danger {
+  background: #f3d2cb;
+  color: #742b20;
+}
+.panel.compact {
+  min-height: auto;
+  margin-bottom: 16px;
+}
+.site-form {
+  display: grid;
+  grid-template-columns: 1fr 2fr 120px auto;
+  gap: 12px;
+  align-items: end;
+}
+label {
+  display: grid;
+  gap: 5px;
+  color: #718078;
+  font-size: 12px;
+}
+input,
+select {
+  border: 1px solid #dbe3dc;
+  background: white;
+  border-radius: 7px;
+  padding: 9px 10px;
+  color: #17211b;
+}
+.hint,
+td small {
+  display: block;
+  color: #819087;
+  font-size: 11px;
+}
+.stats.four {
+  grid-template-columns: repeat(4, 1fr);
+}
+.facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin: 0;
+}
+.facts div {
+  border-bottom: 1px solid #edf0ed;
+  padding-bottom: 8px;
+}
+.facts dt {
+  color: #718078;
+  font-size: 11px;
+}
+.facts dd {
+  margin: 3px 0 0;
+  font-weight: 700;
+}
+.section {
+  margin-top: 16px;
+}
+.heading.small {
+  margin-bottom: 14px;
+}
+.filters {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.url-cell {
+  max-width: 280px;
+  overflow-wrap: anywhere;
+}
 .timing {
   font-size: 11px;
   color: #91a098;
@@ -211,6 +285,9 @@ button {
   }
   .stats {
     grid-template-columns: repeat(2, 1fr);
+  }
+  .site-form {
+    grid-template-columns: 1fr;
   }
   .grid {
     grid-template-columns: 1fr;

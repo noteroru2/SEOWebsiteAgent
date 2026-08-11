@@ -8,6 +8,8 @@ export default defineConfig({
       '@seo-agent/database': resolve('packages/database/src/index.ts'),
       '@seo-agent/resource-guard': resolve('packages/resource-guard/src/index.ts'),
       '@seo-agent/shared': resolve('packages/shared/src/index.ts'),
+      '@seo-agent/crawler': resolve('packages/crawler/src/index.ts'),
+      '@seo-agent/seo-engine': resolve('packages/seo-engine/src/index.ts'),
     },
   },
 });

@@ -7,6 +7,8 @@ import {
   markJobSucceeded,
   markJobFailed,
   recoverStaleJobs,
+  requestJobCancellation,
+  touchJobHeartbeat,
 } from '@seo-agent/database';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 
@@ -91,5 +93,16 @@ suite('database, migrations, and queue', () => {
     expect(recovered).toHaveLength(1);
     expect(recovered[0]!.status).toBe('QUEUED');
     expect(recovered[0]!.attemptCount).toBe(1);
+  });
+  it('supports queued cancellation and heartbeat updates', async () => {
+    const cancelled = await enqueueJob({ type: 'SYSTEM_TEST' }, database.db);
+    expect((await requestJobCancellation(cancelled.id, database.db))?.status).toBe('CANCELLED');
+    const running = await enqueueJob({ type: 'SYSTEM_TEST' }, database.db);
+    await claimNextJob('heartbeat-worker', database.pool);
+    await touchJobHeartbeat(running.id, database.db);
+    const result = await database.pool.query('SELECT heartbeat_at FROM jobs WHERE id=$1', [
+      running.id,
+    ]);
+    expect(result.rows[0].heartbeat_at).toBeTruthy();
   });
 });

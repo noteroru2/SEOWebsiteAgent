@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const jobStatuses = ['QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'] as const;
 export type JobStatus = (typeof jobStatuses)[number];
-export const jobTypes = ['SYSTEM_TEST'] as const;
+export const jobTypes = ['SYSTEM_TEST', 'SITE_CRAWL'] as const;
 export type JobType = (typeof jobTypes)[number];
 
 export const createSiteSchema = z.object({
@@ -13,13 +13,21 @@ export const createSiteSchema = z.object({
     .refine(
       (value) => ['http:', 'https:'].includes(new URL(value).protocol),
       'Only HTTP(S) URLs are allowed',
-    ),
+    )
+    .transform((value) => new URL(value).toString()),
+  active: z.boolean().default(true),
+  crawlEnabled: z.boolean().default(true),
+  maxPages: z.coerce.number().int().min(1).max(5000).default(500),
+  crawlDelayMs: z.coerce.number().int().min(0).max(60_000).default(300),
+  requestTimeoutMs: z.coerce.number().int().min(1000).max(120_000).default(10_000),
 });
 
-export const enqueueJobSchema = z.object({
-  type: z.enum(jobTypes),
-  siteId: z.string().uuid().optional(),
-});
+export const enqueueJobSchema = z
+  .object({ type: z.enum(jobTypes), siteId: z.string().uuid().optional() })
+  .superRefine((value, ctx) => {
+    if (value.type === 'SITE_CRAWL' && !value.siteId)
+      ctx.addIssue({ code: 'custom', path: ['siteId'], message: 'SITE_CRAWL requires a siteId' });
+  });
 
 export const envSchema = z.object({
   DATABASE_URL: z.string().min(1),

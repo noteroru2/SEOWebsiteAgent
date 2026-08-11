@@ -18,5 +18,7 @@ await build({
     '@seo-agent/database': localFile('../../packages/database/src/index.ts'),
     '@seo-agent/shared': localFile('../../packages/shared/src/index.ts'),
     '@seo-agent/resource-guard': localFile('../../packages/resource-guard/src/index.ts'),
+    '@seo-agent/crawler': localFile('../../packages/crawler/src/index.ts'),
+    '@seo-agent/seo-engine': localFile('../../packages/seo-engine/src/index.ts'),
   },
 });

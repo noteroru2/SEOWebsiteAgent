@@ -7,7 +7,7 @@ try {
   const existing = await db
     .select()
     .from(sites)
-    .where(eq(sites.url, 'https://example.com'))
+    .where(eq(sites.url, 'https://example.com/'))
     .limit(1);
   if (!existing.length) await createSite({ name: 'Demo Site', url: 'https://example.com' }, db);
   console.log('Demo data ready.');

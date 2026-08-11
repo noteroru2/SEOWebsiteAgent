@@ -1,6 +1,6 @@
 # SEO Website Agent V1 — Low Resource Pilot
 
-Local-first Batch 1 foundation for a safe SEO operator. It provides a Next.js dashboard, PostgreSQL/Drizzle data layer, persistent database queue, one low-resource worker, audit events, resource checks, and a complete `SYSTEM_TEST` demonstration. It does **not** crawl production sites, call AI or Google APIs, edit repositories, deploy, or connect to Hetzner.
+Local-first foundation for a safe SEO operator. Batch 2 adds a bounded read-only HTTP crawler and deterministic technical SEO analysis to the Batch 1 Next.js, PostgreSQL queue, worker, audit, and resource-safety foundation. It does **not** call AI or Google APIs, edit repositories, deploy, or connect to Hetzner.
 
 ## Architecture
 
@@ -8,7 +8,8 @@ Local-first Batch 1 foundation for a safe SEO operator. It provides a Next.js da
 - `apps/worker`: one DB-backed worker; only registered job types execute.
 - `packages/database`: schema, migrations, queue and summary queries.
 - `packages/resource-guard`: portable memory, disk and load safety checks.
-- Remaining packages define narrow future-facing contracts only.
+- `packages/crawler`: URL safety, robots/sitemap discovery, controlled HTTP fetching, and HTML extraction.
+- `packages/seo-engine`: deterministic indexability, issue detection, and compact summaries.
 
 PostgreSQL is both the system of record and queue. Claiming uses a transaction, row locking and an advisory lock. A partial unique index enforces at most one heavy `RUNNING` job even with multiple worker processes. Jobs record attempts, timestamps, failures, heartbeats and immutable events. Stale work is returned to `QUEUED` without erasing its attempt count.
 
@@ -26,7 +27,7 @@ npm.cmd run dev:web
 npm.cmd run dev:worker
 ```
 
-Open `http://localhost:3000`. Select **Run system test**, allow the worker to claim it, then reload the Jobs page. Browser polling is intentionally absent.
+Open `http://localhost:3000`. Add a public HTTP(S) site on **Sites**, select **Run crawl**, then reload its detail page after the worker finishes. Browser polling is intentionally absent. `SYSTEM_TEST` remains available on Dashboard and Jobs.
 
 ## Docker
 
@@ -34,7 +35,7 @@ Open `http://localhost:3000`. Select **Run system test**, allow the worker to cl
 
 ## Environment variables
 
-`.env.example` is authoritative and contains placeholders/local-only values. `DATABASE_URL` is required. Worker polling, stale timeout, and resource thresholds are configurable. Heavy concurrency is locked to `1`. Never place production credentials in this project.
+`.env.example` is authoritative and contains placeholders/local-only values. `DATABASE_URL` is required. Worker polling, stale timeout, resource thresholds, maximum response body, redirects, and retry limits are configurable. Heavy concurrency and crawler request concurrency are locked to `1`. Never place production credentials in this project.
 
 ## Quality and operations
 
@@ -48,7 +49,7 @@ npm.cmd run test:e2e
 npm.cmd run build
 ```
 
-Migrations are ordered SQL files in `packages/database/migrations` and applied through Drizzle. Page queries are bounded and expose basic elapsed timings on Dashboard, Sites, and Jobs.
+Migrations are ordered SQL files in `packages/database/migrations` and applied through Drizzle. Page queries are bounded and expose basic elapsed timings. Crawl pages store structured SEO fields—not raw HTML—and each crawl persists a compact summary for UI reads. See [crawler documentation](docs/crawler.md) and [technical SEO engine](docs/technical-seo-engine.md).
 
 ## Resource model
 
@@ -56,4 +57,4 @@ The eventual host is a Hetzner CX23 (2 vCPU, 4 GB RAM, 40 GB disk) shared with a
 
 ## Batch boundary
 
-Production deployment is explicitly **not part of Batch 1**. No deployment, Hetzner connection, Git push, real GSC credentials, OpenAI calls, crawling or repository modification is implemented.
+Production deployment is explicitly **not part of Batch 2**. No deployment, Hetzner connection, Git push, real GSC credentials, OpenAI calls, browser crawling, automatic fixes, or repository modification is implemented.

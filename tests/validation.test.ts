@@ -11,5 +11,16 @@ describe('input validation', () => {
   });
   it('accepts only registered job types', () => {
     expect(enqueueJobSchema.safeParse({ type: 'SHELL' }).success).toBe(false);
+    expect(enqueueJobSchema.safeParse({ type: 'SITE_CRAWL' }).success).toBe(false);
+    expect(
+      enqueueJobSchema.safeParse({ type: 'SITE_CRAWL', siteId: crypto.randomUUID() }).success,
+    ).toBe(true);
+  });
+  it('enforces bounded crawl configuration', () => {
+    expect(
+      createSiteSchema.safeParse({ name: 'Site', url: 'https://example.com', maxPages: 5001 })
+        .success,
+    ).toBe(false);
+    expect(createSiteSchema.parse({ name: 'Site', url: 'https://example.com' }).maxPages).toBe(500);
   });
 });

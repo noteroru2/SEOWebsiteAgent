@@ -1,0 +1,48 @@
+{
+  "name": "seo-website-agent",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev -w @seo-agent/web",
+    "dev:worker": "npm run dev -w @seo-agent/worker",
+    "build": "npm run build -w @seo-agent/web && npm run build -w @seo-agent/worker",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "vitest run tests/e2e.test.ts",
+    "db:migrate": "tsx packages/database/src/migrate.ts",
+    "db:seed": "tsx packages/database/src/seed.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "latest",
+    "@types/pg": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "latest",
+    "eslint-plugin-react-hooks": "latest",
+    "esbuild": "latest",
+    "globals": "latest",
+    "prettier": "latest",
+    "tsx": "latest",
+    "typescript": "latest",
+    "typescript-eslint": "latest",
+    "vitest": "latest"
+  },
+  "dependencies": {
+    "cheerio": "latest",
+    "drizzle-orm": "latest",
+    "next": "latest",
+    "pg": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "zod": "latest"
+  }
+}

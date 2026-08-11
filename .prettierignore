@@ -1,0 +1,6 @@
+apps/web/next-env.d.ts
+.next/
+**/.next/
+dist/
+**/dist/
+node_modules/

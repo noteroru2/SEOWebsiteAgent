@@ -23,6 +23,10 @@ services:
       dockerfile: apps/web/Dockerfile
     environment:
       DATABASE_URL: postgresql://seo_agent:local_only_change_me@postgres:5432/seo_agent
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:3000/api/google/callback}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
     ports:
       - '3000:3000'
     depends_on:
@@ -43,6 +47,10 @@ services:
       DATABASE_URL: postgresql://seo_agent:local_only_change_me@postgres:5432/seo_agent
       WORKER_ID: worker-compose-1
       HEAVY_JOB_CONCURRENCY: 1
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:3000/api/google/callback}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
     depends_on:
       migrate: { condition: service_completed_successfully }
     healthcheck:

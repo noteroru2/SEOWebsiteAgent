@@ -34,7 +34,12 @@ export async function enqueueJob(input: unknown, database = getDatabase().db) {
   const value = enqueueJobSchema.parse(input);
   const [job] = await database
     .insert(schema.jobs)
-    .values({ type: value.type, siteId: value.siteId, payload: {} })
+    .values({
+      type: value.type,
+      siteId: value.siteId,
+      heavy: value.type !== 'GSC_SYNC',
+      payload: value.mode ? { mode: value.mode } : {},
+    })
     .returning();
   await database.insert(schema.jobEvents).values({ jobId: job!.id, event: 'ENQUEUED' });
   return job!;
@@ -483,4 +488,394 @@ export async function databaseHealthy(pool = getDatabase().pool) {
     return false;
   }
 }
-export const registeredJobTypes: ReadonlySet<JobType> = new Set(['SYSTEM_TEST', 'SITE_CRAWL']);
+export const registeredJobTypes: ReadonlySet<JobType> = new Set([
+  'SYSTEM_TEST',
+  'SITE_CRAWL',
+  'GSC_SYNC',
+]);
+
+export async function createGscOAuthState(
+  siteId: string,
+  stateHash: string,
+  database = getDatabase().db,
+) {
+  const [row] = await database
+    .insert(schema.gscOAuthStates)
+    .values({ siteId, stateHash, expiresAt: new Date(Date.now() + 10 * 60_000) })
+    .returning();
+  return row!;
+}
+
+export async function consumeGscOAuthState(stateHash: string, database = getDatabase().db) {
+  const [row] = await database
+    .update(schema.gscOAuthStates)
+    .set({ consumedAt: new Date() })
+    .where(
+      and(
+        eq(schema.gscOAuthStates.stateHash, stateHash),
+        sql`${schema.gscOAuthStates.consumedAt} IS NULL`,
+        sql`${schema.gscOAuthStates.expiresAt} > now()`,
+      ),
+    )
+    .returning();
+  return row;
+}
+
+export async function saveGscConnection(
+  input: {
+    siteId: string;
+    encryptedRefreshToken: string;
+    encryptedAccessToken: string;
+    accessTokenExpiresAt: Date;
+    scope: string;
+    properties: Array<{ propertyUri: string; permissionLevel: string }>;
+  },
+  pool = getDatabase().pool,
+) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const connection = await client.query(
+      `INSERT INTO gsc_connections(site_id,encrypted_refresh_token,encrypted_access_token,access_token_expires_at,scope,status) VALUES($1,$2,$3,$4,$5,'CONNECTED') ON CONFLICT(site_id) DO UPDATE SET encrypted_refresh_token=excluded.encrypted_refresh_token,encrypted_access_token=excluded.encrypted_access_token,access_token_expires_at=excluded.access_token_expires_at,scope=excluded.scope,status='CONNECTED',disconnected_at=NULL,last_error_code=NULL,updated_at=now() RETURNING *`,
+      [
+        input.siteId,
+        input.encryptedRefreshToken,
+        input.encryptedAccessToken,
+        input.accessTokenExpiresAt,
+        input.scope,
+      ],
+    );
+    const id = connection.rows[0].id as string;
+    for (const property of input.properties)
+      await client.query(
+        `INSERT INTO gsc_properties(connection_id,property_uri,property_type,permission_level,last_discovered_at) VALUES($1,$2,$3,$4,now()) ON CONFLICT(connection_id,property_uri) DO UPDATE SET property_type=excluded.property_type,permission_level=excluded.permission_level,last_discovered_at=now(),updated_at=now()`,
+        [
+          id,
+          property.propertyUri,
+          property.propertyUri.startsWith('sc-domain:') ? 'DOMAIN' : 'URL_PREFIX',
+          property.permissionLevel,
+        ],
+      );
+    await client.query(
+      `INSERT INTO system_events(source,level,event,detail) VALUES('gsc','INFO','GSC_PROPERTY_DISCOVERED',jsonb_build_object('siteId',$1::text,'count',$2::int))`,
+      [input.siteId, input.properties.length],
+    );
+    await client.query('COMMIT');
+    return connection.rows[0] as Record<string, unknown>;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function mapGscProperty(
+  siteId: string,
+  propertyId: string,
+  database = getDatabase().db,
+) {
+  const [connection] = await database
+    .select()
+    .from(schema.gscConnections)
+    .where(
+      and(eq(schema.gscConnections.siteId, siteId), eq(schema.gscConnections.status, 'CONNECTED')),
+    )
+    .limit(1);
+  if (!connection)
+    throw Object.assign(new Error('Google connection required'), { code: 'AUTH_REQUIRED' });
+  const [property] = await database
+    .select()
+    .from(schema.gscProperties)
+    .where(
+      and(
+        eq(schema.gscProperties.id, propertyId),
+        eq(schema.gscProperties.connectionId, connection.id),
+      ),
+    )
+    .limit(1);
+  if (!property)
+    throw Object.assign(new Error('Property is not available to this connection'), {
+      code: 'INVALID_PROPERTY',
+    });
+  const [mapped] = await database
+    .insert(schema.siteGscProperties)
+    .values({ siteId, propertyId, connectionId: connection.id })
+    .onConflictDoUpdate({
+      target: schema.siteGscProperties.siteId,
+      set: { propertyId, connectionId: connection.id, syncEnabled: true, updatedAt: new Date() },
+    })
+    .returning();
+  return mapped!;
+}
+
+export async function disconnectGsc(siteId: string, database = getDatabase().db) {
+  await database
+    .update(schema.siteGscProperties)
+    .set({ syncEnabled: false, updatedAt: new Date() })
+    .where(eq(schema.siteGscProperties.siteId, siteId));
+  const [row] = await database
+    .update(schema.gscConnections)
+    .set({
+      encryptedRefreshToken: null,
+      encryptedAccessToken: null,
+      accessTokenExpiresAt: null,
+      status: 'DISCONNECTED',
+      disconnectedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.gscConnections.siteId, siteId))
+    .returning();
+  return row;
+}
+
+export async function gscConnectionForSite(siteId: string, database = getDatabase().db) {
+  const [row] = await database
+    .select({
+      connection: schema.gscConnections,
+      mapping: schema.siteGscProperties,
+      property: schema.gscProperties,
+    })
+    .from(schema.gscConnections)
+    .leftJoin(
+      schema.siteGscProperties,
+      eq(schema.siteGscProperties.connectionId, schema.gscConnections.id),
+    )
+    .leftJoin(
+      schema.gscProperties,
+      eq(schema.gscProperties.id, schema.siteGscProperties.propertyId),
+    )
+    .where(eq(schema.gscConnections.siteId, siteId))
+    .limit(1);
+  return row;
+}
+
+export async function updateGscAccessToken(
+  connectionId: string,
+  encryptedAccessToken: string,
+  expiresAt: Date,
+  database = getDatabase().db,
+) {
+  await database
+    .update(schema.gscConnections)
+    .set({ encryptedAccessToken, accessTokenExpiresAt: expiresAt, updatedAt: new Date() })
+    .where(eq(schema.gscConnections.id, connectionId));
+}
+
+export async function createGscSyncRun(
+  input: {
+    siteId: string;
+    propertyId: string;
+    jobId: string;
+    mode: string;
+    startDate: string;
+    endDate: string;
+  },
+  database = getDatabase().db,
+) {
+  const [row] = await database.insert(schema.gscSyncRuns).values(input).returning();
+  return row!;
+}
+
+export async function upsertGscRows(
+  dataset: 'SITE' | 'QUERY' | 'PAGE' | 'QUERY_PAGE',
+  identity: { siteId: string; propertyId: string; searchType: string },
+  rows: Array<{
+    date: string;
+    query?: string;
+    page?: string;
+    clicks: number;
+    impressions: number;
+    ctr: number;
+    position: number;
+  }>,
+  pool = getDatabase().pool,
+) {
+  if (!rows.length) return { inserted: 0, updated: 0 };
+  const table =
+    dataset === 'SITE'
+      ? 'gsc_daily_site_metrics'
+      : dataset === 'QUERY'
+        ? 'gsc_query_metrics'
+        : dataset === 'PAGE'
+          ? 'gsc_page_metrics'
+          : 'gsc_query_page_metrics';
+  const extra =
+    dataset === 'QUERY'
+      ? ['query']
+      : dataset === 'PAGE'
+        ? ['page']
+        : dataset === 'QUERY_PAGE'
+          ? ['query', 'page']
+          : [];
+  const columns = [
+    'site_id',
+    'property_id',
+    'search_type',
+    'metric_date',
+    ...extra,
+    'clicks',
+    'impressions',
+    'ctr',
+    'position',
+  ];
+  const width = columns.length;
+  const params: unknown[] = [];
+  const values = rows.map((row, rowIndex) => {
+    params.push(
+      identity.siteId,
+      identity.propertyId,
+      identity.searchType,
+      row.date,
+      ...extra.map((key) => row[key as 'query' | 'page'] ?? ''),
+      row.clicks,
+      row.impressions,
+      row.ctr,
+      row.position,
+    );
+    return `(${Array.from({ length: width }, (_, i) => `$${rowIndex * width + i + 1}`).join(',')})`;
+  });
+  const conflict = ['site_id', 'property_id', 'search_type', 'metric_date', ...extra].join(',');
+  const result = await pool.query(
+    `INSERT INTO ${table}(${columns.join(',')}) VALUES ${values.join(',')} ON CONFLICT(${conflict}) DO UPDATE SET clicks=excluded.clicks,impressions=excluded.impressions,ctr=excluded.ctr,position=excluded.position,updated_at=now() RETURNING (xmax=0) AS inserted`,
+    params,
+  );
+  const inserted = result.rows.filter((row) => row.inserted).length;
+  return { inserted, updated: result.rowCount! - inserted };
+}
+
+export async function finishGscSyncRun(
+  runId: string,
+  fields: {
+    status: string;
+    apiRequests: number;
+    rowsReceived: number;
+    rowsInserted: number;
+    rowsUpdated: number;
+    coverageStatus: string;
+    failureCode?: string;
+    failureSummary?: string;
+  },
+  database = getDatabase().db,
+) {
+  const [row] = await database
+    .update(schema.gscSyncRuns)
+    .set({
+      ...fields,
+      failureSummary: fields.failureSummary?.slice(0, 500),
+      finishedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.gscSyncRuns.id, runId))
+    .returning();
+  return row!;
+}
+
+export async function refreshGscSummary(
+  siteId: string,
+  propertyId: string,
+  syncRunId: string,
+  coverageStatus: string,
+  pool = getDatabase().pool,
+) {
+  const result = await pool.query(
+    `WITH latest AS (SELECT max(metric_date) d FROM gsc_daily_site_metrics WHERE site_id=$1 AND property_id=$2), periods AS (SELECT CASE WHEN metric_date > latest.d-28 THEN 'current' ELSE 'previous' END period, sum(clicks)::float8 clicks,sum(impressions)::float8 impressions,CASE WHEN sum(impressions)>0 THEN sum(clicks)::float8/sum(impressions) ELSE 0 END ctr,CASE WHEN sum(impressions)>0 THEN sum(position*impressions)::float8/sum(impressions) ELSE 0 END position FROM gsc_daily_site_metrics,latest WHERE site_id=$1 AND property_id=$2 AND metric_date > latest.d-56 GROUP BY period), counts AS (SELECT (SELECT count(DISTINCT page) FROM gsc_page_metrics WHERE site_id=$1 AND property_id=$2) pages,(SELECT count(DISTINCT query) FROM gsc_query_metrics WHERE site_id=$1 AND property_id=$2) queries,(SELECT count(*) FROM gsc_daily_site_metrics WHERE site_id=$1 AND property_id=$2)+(SELECT count(*) FROM gsc_query_metrics WHERE site_id=$1 AND property_id=$2)+(SELECT count(*) FROM gsc_page_metrics WHERE site_id=$1 AND property_id=$2)+(SELECT count(*) FROM gsc_query_page_metrics WHERE site_id=$1 AND property_id=$2) rows FROM latest) SELECT latest.d,(SELECT row_to_json(periods) FROM periods WHERE period='current') current,(SELECT row_to_json(periods) FROM periods WHERE period='previous') previous,counts.* FROM latest,counts`,
+    [siteId, propertyId],
+  );
+  const value = result.rows[0];
+  const current = value.current ?? { clicks: 0, impressions: 0, ctr: 0, position: 0 };
+  const previous = value.previous ?? { clicks: 0, impressions: 0, ctr: 0, position: 0 };
+  const deltas = Object.fromEntries(
+    ['clicks', 'impressions', 'ctr', 'position'].map((key) => [
+      key,
+      Number(current[key] ?? 0) - Number(previous[key] ?? 0),
+    ]),
+  );
+  await pool.query(
+    `INSERT INTO gsc_sync_summaries(site_id,property_id,last_sync_run_id,last_finalized_date,current_metrics,previous_metrics,deltas,top_pages_count,top_queries_count,rows_stored,coverage_status,latest_status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'SUCCEEDED') ON CONFLICT(site_id) DO UPDATE SET property_id=excluded.property_id,last_sync_run_id=excluded.last_sync_run_id,last_finalized_date=excluded.last_finalized_date,current_metrics=excluded.current_metrics,previous_metrics=excluded.previous_metrics,deltas=excluded.deltas,top_pages_count=excluded.top_pages_count,top_queries_count=excluded.top_queries_count,rows_stored=excluded.rows_stored,coverage_status=excluded.coverage_status,latest_status='SUCCEEDED',updated_at=now()`,
+    [
+      siteId,
+      propertyId,
+      syncRunId,
+      value.d,
+      JSON.stringify(current),
+      JSON.stringify(previous),
+      JSON.stringify(deltas),
+      value.pages,
+      value.queries,
+      value.rows,
+      coverageStatus,
+    ],
+  );
+}
+
+export async function refreshGscCrawlMappings(
+  siteId: string,
+  propertyId: string,
+  pool = getDatabase().pool,
+) {
+  await pool.query('DELETE FROM gsc_page_crawl_mappings WHERE site_id=$1 AND property_id=$2', [
+    siteId,
+    propertyId,
+  ]);
+  await pool.query(
+    `WITH latest AS (SELECT id FROM crawl_runs WHERE site_id=$1 AND status='SUCCEEDED' ORDER BY created_at DESC LIMIT 1), pages AS (SELECT cp.* FROM crawl_pages cp JOIN latest ON latest.id=cp.crawl_run_id), candidates AS (SELECT DISTINCT pm.page,(SELECT (array_agg(id))[1] FROM pages WHERE url=pm.page HAVING count(*)=1) exact,(SELECT (array_agg(id))[1] FROM pages WHERE final_url=pm.page HAVING count(*)=1) final,(SELECT (array_agg(id))[1] FROM pages WHERE canonical_url=pm.page HAVING count(*)=1) canonical,(SELECT id FROM latest) run_id FROM gsc_page_metrics pm WHERE pm.site_id=$1 AND pm.property_id=$2) INSERT INTO gsc_page_crawl_mappings(site_id,property_id,gsc_page,crawl_run_id,crawl_page_id,reason) SELECT $1,$2,page,run_id,coalesce(exact,final,canonical),CASE WHEN exact IS NOT NULL THEN 'EXACT_URL' WHEN final IS NOT NULL THEN 'FINAL_URL' ELSE 'CANONICAL_MATCH' END FROM candidates WHERE coalesce(exact,final,canonical) IS NOT NULL`,
+    [siteId, propertyId],
+  );
+}
+
+export async function gscSiteStatus(siteId: string, pool = getDatabase().pool) {
+  const result = await pool.query(
+    `SELECT c.status,p.property_uri,s.last_finalized_date,s.latest_status,s.updated_at AS last_sync_at FROM gsc_connections c LEFT JOIN site_gsc_properties m ON m.connection_id=c.id AND m.site_id=$1 LEFT JOIN gsc_properties p ON p.id=m.property_id LEFT JOIN gsc_sync_summaries s ON s.site_id=$1 WHERE c.site_id=$1 LIMIT 1`,
+    [siteId],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function gscSiteView(
+  siteId: string,
+  filters: { query?: string; page?: string } = {},
+  pool = getDatabase().pool,
+) {
+  const started = performance.now();
+  const [connection, properties, summary, runs, queries, pages, queryPages] = await Promise.all([
+    pool.query(
+      `SELECT id,status,disconnected_at,last_error_code FROM gsc_connections WHERE site_id=$1 LIMIT 1`,
+      [siteId],
+    ),
+    pool.query(
+      `SELECT p.id,p.property_uri,p.property_type,p.permission_level,p.last_discovered_at,(m.property_id IS NOT NULL) selected FROM gsc_properties p JOIN gsc_connections c ON c.id=p.connection_id LEFT JOIN site_gsc_properties m ON m.property_id=p.id AND m.site_id=$1 WHERE c.site_id=$1 ORDER BY p.property_uri LIMIT 100`,
+      [siteId],
+    ),
+    pool.query(
+      `SELECT s.*,p.property_uri FROM gsc_sync_summaries s JOIN gsc_properties p ON p.id=s.property_id WHERE s.site_id=$1`,
+      [siteId],
+    ),
+    pool.query(
+      `SELECT id,mode,status,start_date,end_date,api_requests,rows_received,coverage_status,started_at,finished_at,failure_code FROM gsc_sync_runs WHERE site_id=$1 ORDER BY started_at DESC LIMIT 20`,
+      [siteId],
+    ),
+    pool.query(
+      `SELECT query,sum(clicks)::float8 clicks,sum(impressions)::float8 impressions,CASE WHEN sum(impressions)>0 THEN sum(clicks)::float8/sum(impressions) ELSE 0 END ctr,CASE WHEN sum(impressions)>0 THEN sum(position*impressions)::float8/sum(impressions) ELSE 0 END position FROM gsc_query_metrics WHERE site_id=$1 AND ($2='' OR query ILIKE '%'||$2||'%') GROUP BY query ORDER BY clicks DESC LIMIT 50`,
+      [siteId, filters.query ?? ''],
+    ),
+    pool.query(
+      `SELECT page,sum(clicks)::float8 clicks,sum(impressions)::float8 impressions,CASE WHEN sum(impressions)>0 THEN sum(clicks)::float8/sum(impressions) ELSE 0 END ctr,CASE WHEN sum(impressions)>0 THEN sum(position*impressions)::float8/sum(impressions) ELSE 0 END position FROM gsc_page_metrics WHERE site_id=$1 AND ($2='' OR page ILIKE '%'||$2||'%') GROUP BY page ORDER BY clicks DESC LIMIT 50`,
+      [siteId, filters.page ?? ''],
+    ),
+    pool.query(
+      `SELECT metric_date,query,page,clicks,impressions,ctr,position FROM gsc_query_page_metrics WHERE site_id=$1 AND ($2='' OR query ILIKE '%'||$2||'%') AND ($3='' OR page ILIKE '%'||$3||'%') ORDER BY metric_date DESC,clicks DESC LIMIT 50`,
+      [siteId, filters.query ?? '', filters.page ?? ''],
+    ),
+  ]);
+  return {
+    connection: connection.rows[0] ?? null,
+    properties: properties.rows,
+    summary: summary.rows[0] ?? null,
+    runs: runs.rows,
+    queries: queries.rows,
+    pages: pages.rows,
+    queryPages: queryPages.rows,
+    timingMs: performance.now() - started,
+  };
+}

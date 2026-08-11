@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const jobStatuses = ['QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'] as const;
 export type JobStatus = (typeof jobStatuses)[number];
-export const jobTypes = ['SYSTEM_TEST', 'SITE_CRAWL'] as const;
+export const jobTypes = ['SYSTEM_TEST', 'SITE_CRAWL', 'GSC_SYNC'] as const;
 export type JobType = (typeof jobTypes)[number];
 
 export const createSiteSchema = z.object({
@@ -23,10 +23,18 @@ export const createSiteSchema = z.object({
 });
 
 export const enqueueJobSchema = z
-  .object({ type: z.enum(jobTypes), siteId: z.string().uuid().optional() })
+  .object({
+    type: z.enum(jobTypes),
+    siteId: z.string().uuid().optional(),
+    mode: z.enum(['BOOTSTRAP_28D', 'MANUAL_90D', 'INCREMENTAL']).optional(),
+  })
   .superRefine((value, ctx) => {
-    if (value.type === 'SITE_CRAWL' && !value.siteId)
-      ctx.addIssue({ code: 'custom', path: ['siteId'], message: 'SITE_CRAWL requires a siteId' });
+    if (['SITE_CRAWL', 'GSC_SYNC'].includes(value.type) && !value.siteId)
+      ctx.addIssue({
+        code: 'custom',
+        path: ['siteId'],
+        message: `${value.type} requires a siteId`,
+      });
   });
 
 export const envSchema = z.object({
@@ -34,4 +42,11 @@ export const envSchema = z.object({
   WORKER_ID: z.string().default('worker-local-1'),
   WORKER_POLL_MS: z.coerce.number().int().min(250).default(2000),
   STALE_JOB_MINUTES: z.coerce.number().int().min(1).default(15),
+  APP_ENCRYPTION_KEY: z.string().optional(),
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_REDIRECT_URI: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.string().url().optional(),
+  ),
 });

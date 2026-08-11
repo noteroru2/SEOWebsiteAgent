@@ -10,6 +10,7 @@ export default defineConfig({
       '@seo-agent/shared': resolve('packages/shared/src/index.ts'),
       '@seo-agent/crawler': resolve('packages/crawler/src/index.ts'),
       '@seo-agent/seo-engine': resolve('packages/seo-engine/src/index.ts'),
+      '@seo-agent/gsc': resolve('packages/gsc/src/index.ts'),
     },
   },
 });

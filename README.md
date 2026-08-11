@@ -1,6 +1,6 @@
 # SEO Website Agent V1 — Low Resource Pilot
 
-Local-first foundation for a safe SEO operator. Batch 2 adds a bounded read-only HTTP crawler and deterministic technical SEO analysis to the Batch 1 Next.js, PostgreSQL queue, worker, audit, and resource-safety foundation. It does **not** call AI or Google APIs, edit repositories, deploy, or connect to Hetzner.
+Local-first foundation for a safe SEO operator. Batch 3 adds secure, read-only Google Search Console property discovery and bounded finalized-data ingestion to the crawler and deterministic SEO foundation. It does **not** call AI, edit managed repositories, deploy, or connect to Hetzner.
 
 ## Architecture
 
@@ -10,6 +10,7 @@ Local-first foundation for a safe SEO operator. Batch 2 adds a bounded read-only
 - `packages/resource-guard`: portable memory, disk and load safety checks.
 - `packages/crawler`: URL safety, robots/sitemap discovery, controlled HTTP fetching, and HTML extraction.
 - `packages/seo-engine`: deterministic indexability, issue detection, and compact summaries.
+- `packages/gsc`: OAuth security, encrypted credentials, Google REST adapter, bounded pagination, and metric aggregation.
 
 PostgreSQL is both the system of record and queue. Claiming uses a transaction, row locking and an advisory lock. A partial unique index enforces at most one heavy `RUNNING` job even with multiple worker processes. Jobs record attempts, timestamps, failures, heartbeats and immutable events. Stale work is returned to `QUEUED` without erasing its attempt count.
 
@@ -35,7 +36,7 @@ Open `http://localhost:3000`. Add a public HTTP(S) site on **Sites**, select **R
 
 ## Environment variables
 
-`.env.example` is authoritative and contains placeholders/local-only values. `DATABASE_URL` is required. Worker polling, stale timeout, resource thresholds, maximum response body, redirects, and retry limits are configurable. Heavy concurrency and crawler request concurrency are locked to `1`. Never place production credentials in this project.
+`.env.example` is authoritative and contains placeholders/local-only values. `DATABASE_URL` is required. Google connection additionally requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, and a 32-byte `APP_ENCRYPTION_KEY`. Missing Google configuration fails closed. Never commit real credentials.
 
 ## Quality and operations
 
@@ -49,7 +50,7 @@ npm.cmd run test:e2e
 npm.cmd run build
 ```
 
-Migrations are ordered SQL files in `packages/database/migrations` and applied through Drizzle. Page queries are bounded and expose basic elapsed timings. Crawl pages store structured SEO fields—not raw HTML—and each crawl persists a compact summary for UI reads. See [crawler documentation](docs/crawler.md) and [technical SEO engine](docs/technical-seo-engine.md).
+Migrations are ordered SQL files in `packages/database/migrations` and applied through Drizzle. Crawl pages store structured SEO fields—not raw HTML—and GSC tables store normalized metrics—not raw API JSON. See [crawler documentation](docs/crawler.md), [technical SEO engine](docs/technical-seo-engine.md), and [Google Search Console](docs/google-search-console.md).
 
 ## Resource model
 
@@ -57,4 +58,4 @@ The eventual host is a Hetzner CX23 (2 vCPU, 4 GB RAM, 40 GB disk) shared with a
 
 ## Batch boundary
 
-Production deployment is explicitly **not part of Batch 2**. No deployment, Hetzner connection, Git push, real GSC credentials, OpenAI calls, browser crawling, automatic fixes, or repository modification is implemented.
+Production deployment is explicitly **not part of Batch 3**. No deployment, Hetzner connection, Git push, live credentials, OpenAI calls, automatic fixes, or managed-site repository modification is implemented.

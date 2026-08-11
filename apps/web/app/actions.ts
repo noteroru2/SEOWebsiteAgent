@@ -1,5 +1,11 @@
 'use server';
-import { createSite, enqueueJob, requestJobCancellation } from '@seo-agent/database';
+import {
+  createSite,
+  enqueueJob,
+  requestJobCancellation,
+  mapGscProperty,
+  disconnectGsc,
+} from '@seo-agent/database';
 import { createSiteSchema } from '@seo-agent/shared';
 import { assertSafeTarget } from '@seo-agent/crawler';
 import { revalidatePath } from 'next/cache';
@@ -36,4 +42,28 @@ export async function cancelCrawl(jobId: string, siteId: string) {
   await requestJobCancellation(jobId);
   revalidatePath(`/sites/${siteId}`);
   revalidatePath('/jobs');
+}
+
+export async function selectGscProperty(siteId: string, formData: FormData) {
+  const propertyId = String(formData.get('propertyId') ?? '');
+  if (!/^[0-9a-f-]{36}$/i.test(propertyId)) throw new Error('Invalid property');
+  await mapGscProperty(siteId, propertyId);
+  revalidatePath(`/sites/${siteId}`);
+  revalidatePath(`/sites/${siteId}/search-console`);
+}
+
+export async function enqueueGscSync(
+  siteId: string,
+  mode: 'BOOTSTRAP_28D' | 'MANUAL_90D' | 'INCREMENTAL' = 'INCREMENTAL',
+) {
+  await enqueueJob({ type: 'GSC_SYNC', siteId, mode });
+  revalidatePath(`/sites/${siteId}`);
+  revalidatePath(`/sites/${siteId}/search-console`);
+  revalidatePath('/jobs');
+}
+
+export async function disconnectGoogle(siteId: string) {
+  await disconnectGsc(siteId);
+  revalidatePath(`/sites/${siteId}`);
+  revalidatePath(`/sites/${siteId}/search-console`);
 }

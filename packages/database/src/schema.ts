@@ -1,6 +1,9 @@
 import { sql } from 'drizzle-orm';
 import {
   boolean,
+  bigint,
+  date,
+  doublePrecision,
   index,
   integer,
   jsonb,
@@ -83,6 +86,12 @@ export const jobs = pgTable(
     uniqueIndex('jobs_one_heavy_running_idx')
       .on(t.heavy)
       .where(sql`${t.status} = 'RUNNING' AND ${t.heavy} = true`),
+    uniqueIndex('jobs_one_gsc_running_idx')
+      .on(t.type)
+      .where(sql`${t.type} = 'GSC_SYNC' AND ${t.status} = 'RUNNING'`),
+    uniqueIndex('jobs_one_gsc_sync_per_site_idx')
+      .on(t.siteId)
+      .where(sql`${t.type} = 'GSC_SYNC' AND ${t.status} IN ('QUEUED','RUNNING')`),
   ],
 );
 export const jobEvents = pgTable(
@@ -202,6 +211,265 @@ export const seoIssues = pgTable(
     index('seo_issues_site_resolved_idx').on(t.siteId, t.resolvedAt),
     index('seo_issues_run_severity_idx').on(t.crawlRunId, t.severity),
     index('seo_issues_run_code_idx').on(t.crawlRunId, t.ruleCode),
+  ],
+);
+
+export const gscConnections = pgTable('gsc_connections', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  siteId: uuid('site_id')
+    .notNull()
+    .unique()
+    .references(() => sites.id, { onDelete: 'cascade' }),
+  encryptedRefreshToken: text('encrypted_refresh_token'),
+  encryptedAccessToken: text('encrypted_access_token'),
+  accessTokenExpiresAt: timestamp('access_token_expires_at', { withTimezone: true }),
+  scope: text('scope').notNull(),
+  status: text('status').notNull().default('CONNECTED'),
+  lastErrorCode: text('last_error_code'),
+  disconnectedAt: timestamp('disconnected_at', { withTimezone: true }),
+  ...timestamps,
+});
+
+export const gscOAuthStates = pgTable(
+  'gsc_oauth_states',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    stateHash: text('state_hash').notNull().unique(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('gsc_oauth_states_expiry_idx').on(t.expiresAt)],
+);
+
+export const gscProperties = pgTable(
+  'gsc_properties',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    connectionId: uuid('connection_id').references(() => gscConnections.id, {
+      onDelete: 'set null',
+    }),
+    propertyUri: text('property_uri').notNull(),
+    propertyType: text('property_type').notNull(),
+    permissionLevel: text('permission_level').notNull(),
+    lastDiscoveredAt: timestamp('last_discovered_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('gsc_properties_connection_uri_idx').on(t.connectionId, t.propertyUri),
+    index('gsc_properties_connection_idx').on(t.connectionId),
+  ],
+);
+
+export const siteGscProperties = pgTable(
+  'site_gsc_properties',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    propertyId: uuid('property_id')
+      .notNull()
+      .references(() => gscProperties.id, { onDelete: 'restrict' }),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => gscConnections.id, { onDelete: 'restrict' }),
+    searchType: text('search_type').notNull().default('web'),
+    syncEnabled: boolean('sync_enabled').notNull().default(true),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('site_gsc_properties_site_idx').on(t.siteId),
+    index('site_gsc_properties_property_idx').on(t.propertyId),
+  ],
+);
+
+export const gscSyncRuns = pgTable(
+  'gsc_sync_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    propertyId: uuid('property_id')
+      .notNull()
+      .references(() => gscProperties.id, { onDelete: 'restrict' }),
+    jobId: uuid('job_id').references(() => jobs.id, { onDelete: 'set null' }),
+    mode: text('mode').notNull(),
+    startDate: date('start_date').notNull(),
+    endDate: date('end_date').notNull(),
+    status: text('status').notNull().default('RUNNING'),
+    apiRequests: integer('api_requests').notNull().default(0),
+    rowsReceived: integer('rows_received').notNull().default(0),
+    rowsInserted: integer('rows_inserted').notNull().default(0),
+    rowsUpdated: integer('rows_updated').notNull().default(0),
+    coverageStatus: text('coverage_status').notNull().default('COMPLETE_AS_RETURNED'),
+    failureCode: text('failure_code'),
+    failureSummary: text('failure_summary'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    index('gsc_sync_runs_site_idx').on(t.siteId, t.startedAt),
+    index('gsc_sync_runs_status_idx').on(t.status, t.startedAt),
+  ],
+);
+
+const metricColumns = () => ({
+  clicks: bigint('clicks', { mode: 'number' }).notNull().default(0),
+  impressions: bigint('impressions', { mode: 'number' }).notNull().default(0),
+  ctr: doublePrecision('ctr').notNull().default(0),
+  position: doublePrecision('position').notNull().default(0),
+  ...timestamps,
+});
+
+export const gscDailySiteMetrics = pgTable(
+  'gsc_daily_site_metrics',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    propertyId: uuid('property_id')
+      .notNull()
+      .references(() => gscProperties.id, { onDelete: 'cascade' }),
+    searchType: text('search_type').notNull().default('web'),
+    metricDate: date('metric_date').notNull(),
+    ...metricColumns(),
+  },
+  (t) => [
+    uniqueIndex('gsc_daily_site_unique_idx').on(t.siteId, t.propertyId, t.searchType, t.metricDate),
+    index('gsc_daily_site_date_idx').on(t.siteId, t.metricDate),
+  ],
+);
+export const gscQueryMetrics = pgTable(
+  'gsc_query_metrics',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    propertyId: uuid('property_id')
+      .notNull()
+      .references(() => gscProperties.id, { onDelete: 'cascade' }),
+    searchType: text('search_type').notNull().default('web'),
+    metricDate: date('metric_date').notNull(),
+    query: text('query').notNull(),
+    ...metricColumns(),
+  },
+  (t) => [
+    uniqueIndex('gsc_query_unique_idx').on(
+      t.siteId,
+      t.propertyId,
+      t.searchType,
+      t.metricDate,
+      t.query,
+    ),
+    index('gsc_query_lookup_idx').on(t.siteId, t.query, t.metricDate),
+  ],
+);
+export const gscPageMetrics = pgTable(
+  'gsc_page_metrics',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    propertyId: uuid('property_id')
+      .notNull()
+      .references(() => gscProperties.id, { onDelete: 'cascade' }),
+    searchType: text('search_type').notNull().default('web'),
+    metricDate: date('metric_date').notNull(),
+    page: text('page').notNull(),
+    ...metricColumns(),
+  },
+  (t) => [
+    uniqueIndex('gsc_page_unique_idx').on(
+      t.siteId,
+      t.propertyId,
+      t.searchType,
+      t.metricDate,
+      t.page,
+    ),
+    index('gsc_page_lookup_idx').on(t.siteId, t.page, t.metricDate),
+  ],
+);
+export const gscQueryPageMetrics = pgTable(
+  'gsc_query_page_metrics',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    propertyId: uuid('property_id')
+      .notNull()
+      .references(() => gscProperties.id, { onDelete: 'cascade' }),
+    searchType: text('search_type').notNull().default('web'),
+    metricDate: date('metric_date').notNull(),
+    query: text('query').notNull(),
+    page: text('page').notNull(),
+    ...metricColumns(),
+  },
+  (t) => [
+    uniqueIndex('gsc_query_page_unique_idx').on(
+      t.siteId,
+      t.propertyId,
+      t.searchType,
+      t.metricDate,
+      t.query,
+      t.page,
+    ),
+    index('gsc_query_page_lookup_idx').on(t.siteId, t.query, t.page, t.metricDate),
+  ],
+);
+
+export const gscSyncSummaries = pgTable('gsc_sync_summaries', {
+  siteId: uuid('site_id')
+    .primaryKey()
+    .references(() => sites.id, { onDelete: 'cascade' }),
+  propertyId: uuid('property_id')
+    .notNull()
+    .references(() => gscProperties.id, { onDelete: 'cascade' }),
+  lastSyncRunId: uuid('last_sync_run_id').references(() => gscSyncRuns.id, {
+    onDelete: 'set null',
+  }),
+  lastFinalizedDate: date('last_finalized_date'),
+  currentMetrics: jsonb('current_metrics').notNull().default({}),
+  previousMetrics: jsonb('previous_metrics').notNull().default({}),
+  deltas: jsonb('deltas').notNull().default({}),
+  topPagesCount: integer('top_pages_count').notNull().default(0),
+  topQueriesCount: integer('top_queries_count').notNull().default(0),
+  rowsStored: bigint('rows_stored', { mode: 'number' }).notNull().default(0),
+  coverageStatus: text('coverage_status').notNull().default('COMPLETE_AS_RETURNED'),
+  latestStatus: text('latest_status').notNull().default('SUCCEEDED'),
+  ...timestamps,
+});
+
+export const gscPageCrawlMappings = pgTable(
+  'gsc_page_crawl_mappings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    propertyId: uuid('property_id')
+      .notNull()
+      .references(() => gscProperties.id, { onDelete: 'cascade' }),
+    gscPage: text('gsc_page').notNull(),
+    crawlRunId: uuid('crawl_run_id').references(() => crawlRuns.id, { onDelete: 'set null' }),
+    crawlPageId: uuid('crawl_page_id').references(() => crawlPages.id, { onDelete: 'set null' }),
+    reason: text('reason').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('gsc_page_crawl_mapping_unique_idx').on(t.siteId, t.propertyId, t.gscPage),
+    index('gsc_page_crawl_mapping_reason_idx').on(t.siteId, t.reason),
   ],
 );
 export const opportunities = pgTable(

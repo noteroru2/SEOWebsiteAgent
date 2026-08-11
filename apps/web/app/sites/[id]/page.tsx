@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { siteDetail } from '@seo-agent/database';
+import { gscSiteStatus, siteDetail } from '@seo-agent/database';
 import { cancelCrawl, enqueueSiteCrawl } from '../../actions';
 
 export const dynamic = 'force-dynamic';
@@ -13,7 +13,7 @@ export default async function SitePage({
 }) {
   const { id } = await params;
   const filters = await searchParams;
-  const data = await siteDetail(id, filters);
+  const [data, gsc] = await Promise.all([siteDetail(id, filters), gscSiteStatus(id)]);
   if (!data) notFound();
   const summary = (data.latest?.summary ?? {}) as Record<string, unknown>;
   return (
@@ -40,6 +40,21 @@ export default async function SitePage({
         <Stat label="Indexable" value={data.latest?.pagesIndexable ?? 0} />
         <Stat label="Issues" value={data.latest?.issuesFound ?? 0} />
       </div>
+      <section className="panel compact section">
+        <div className="heading small">
+          <div>
+            <h2>Google Search Console</h2>
+            <p className="hint">
+              {gsc?.status === 'CONNECTED' ? 'Connected' : 'Not connected'} · Property:{' '}
+              {gsc?.property_uri ?? 'Not selected'} · Last sync:{' '}
+              {gsc?.last_sync_at ? new Date(gsc.last_sync_at).toLocaleString() : 'Never'} · Status:{' '}
+              {gsc?.latest_status ??
+                (gsc?.status === 'CONNECTED' ? 'Needs Attention' : 'Not configured')}
+            </p>
+          </div>
+          <Link href={`/sites/${id}/search-console`}>Open Search Console</Link>
+        </div>
+      </section>
       <div className="grid">
         <section className="panel">
           <h2>Latest crawl</h2>

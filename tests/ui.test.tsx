@@ -21,6 +21,41 @@ vi.mock('@seo-agent/database', () => ({
   enqueueJob: vi.fn(),
   createSite: vi.fn(),
   requestJobCancellation: vi.fn(),
+  getSite: vi.fn(async () => ({
+    id: '11111111-1111-4111-8111-111111111111',
+    name: 'Fixture Site',
+    url: 'https://example.com/',
+  })),
+  gscSiteView: vi.fn(async () => ({
+    connection: { id: 'connection', status: 'CONNECTED' },
+    properties: [
+      {
+        id: 'property',
+        property_uri: 'sc-domain:example.com',
+        permission_level: 'siteOwner',
+        selected: true,
+      },
+    ],
+    summary: {
+      current_metrics: { clicks: 10, impressions: 100, ctr: 0.1, position: 4 },
+      previous_metrics: {},
+      deltas: {},
+      coverage_status: 'COMPLETE_AS_RETURNED',
+      rows_stored: 20,
+      last_finalized_date: '2026-08-08',
+    },
+    runs: [],
+    queries: [{ query: 'seo', clicks: 10, impressions: 100, ctr: 0.1, position: 4 }],
+    pages: [],
+    queryPages: [],
+    timingMs: 2,
+  })),
+  gscSiteStatus: vi.fn(async () => ({
+    status: 'CONNECTED',
+    property_uri: 'sc-domain:example.com',
+    latest_status: 'SUCCEEDED',
+    last_sync_at: new Date('2026-08-08'),
+  })),
   siteDetail: vi.fn(async () => ({
     site: {
       id: '11111111-1111-4111-8111-111111111111',
@@ -85,5 +120,18 @@ describe('server-rendered UI foundations', () => {
     expect(html).toContain('Pages crawled');
     expect(html).toContain('TITLE_MISSING');
     expect(html).toContain('Orphan candidates');
+  });
+  it('renders bounded GSC data without credential material', async () => {
+    const Page = (await import('../apps/web/app/sites/[id]/search-console/page')).default;
+    const html = renderToStaticMarkup(
+      await Page({
+        params: Promise.resolve({ id: '11111111-1111-4111-8111-111111111111' }),
+        searchParams: Promise.resolve({}),
+      }),
+    );
+    expect(html).toContain('sc-domain:example.com');
+    expect(html).toContain('28d clicks');
+    expect(html).not.toContain('refresh_token');
+    expect(html).not.toContain('access_token');
   });
 });

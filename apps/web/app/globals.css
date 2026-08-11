@@ -194,6 +194,24 @@ button.danger {
   background: #f3d2cb;
   color: #742b20;
 }
+.button-link {
+  display: inline-block;
+  background: #b6f36b;
+  color: #17211b;
+  border-radius: 8px;
+  padding: 10px 15px;
+  font-weight: 700;
+}
+.notice {
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #ecf3ee;
+  margin-bottom: 16px;
+}
+.danger-text {
+  background: #f3d2cb;
+  color: #742b20;
+}
 .panel.compact {
   min-height: auto;
   margin-bottom: 16px;

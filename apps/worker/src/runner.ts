@@ -13,6 +13,13 @@ import {
   touchJobHeartbeat,
   markJobCancelled,
   recordJobEvent,
+  gscConnectionForSite,
+  updateGscAccessToken,
+  createGscSyncRun,
+  upsertGscRows,
+  finishGscSyncRun,
+  refreshGscSummary,
+  refreshGscCrawlMappings,
   type Database,
 } from '@seo-agent/database';
 import { resourceGuardFromEnv, type ResourceGuard } from '@seo-agent/resource-guard';
@@ -20,11 +27,21 @@ import { crawlSite } from '@seo-agent/crawler';
 import { analyzePages, summarizeCrawl } from '@seo-agent/seo-engine';
 import type { JobType } from '@seo-agent/shared';
 import type { Pool } from 'pg';
+import {
+  decryptSecret,
+  encryptSecret,
+  fetchDatasetPages,
+  GSC_DATASETS,
+  GoogleSearchConsoleApi,
+  refreshGoogleToken,
+  type SearchConsoleApi,
+} from '@seo-agent/gsc';
 
 export async function executeOne(
   workerId: string,
   pool: Pool,
   guard: ResourceGuard = resourceGuardFromEnv(),
+  gscApiOverride?: SearchConsoleApi,
 ) {
   const resource = await guard.evaluate();
   if (!resource.allowed) return { state: 'RESOURCE_DENIED' as const, resource };
@@ -106,6 +123,194 @@ export async function executeOne(
         const code = String((error as { code?: string }).code ?? 'CRAWL_FAILED');
         await failCrawlRun(run.id, code, safe.message, database);
         await recordJobEvent(id, 'CRAWL_FAILED', { code, summary: safe.message }, database);
+        throw error;
+      }
+    }
+    if (type === 'GSC_SYNC') {
+      const siteId = String(job.site_id ?? '');
+      const connection = await gscConnectionForSite(siteId, database);
+      if (
+        !connection?.mapping ||
+        !connection.property ||
+        connection.connection.status !== 'CONNECTED'
+      )
+        throw Object.assign(new Error('Connected and mapped Google property required'), {
+          code: 'AUTH_REQUIRED',
+        });
+      let api = gscApiOverride;
+      if (!api) {
+        let accessToken = connection.connection.encryptedAccessToken
+          ? decryptSecret(connection.connection.encryptedAccessToken)
+          : '';
+        if (
+          !accessToken ||
+          !connection.connection.accessTokenExpiresAt ||
+          connection.connection.accessTokenExpiresAt.getTime() < Date.now() + 60_000
+        ) {
+          if (!connection.connection.encryptedRefreshToken)
+            throw Object.assign(new Error('Refresh token unavailable'), {
+              code: 'TOKEN_REFRESH_FAILED',
+            });
+          const refreshed = await refreshGoogleToken(
+            decryptSecret(connection.connection.encryptedRefreshToken),
+          );
+          accessToken = refreshed.access_token;
+          await updateGscAccessToken(
+            connection.connection.id,
+            encryptSecret(accessToken),
+            new Date(Date.now() + refreshed.expires_in * 1000),
+            database,
+          );
+          await recordJobEvent(id, 'GSC_AUTH_REFRESHED', {}, database);
+        }
+        api = new GoogleSearchConsoleApi(accessToken);
+      }
+      const payload = (job.payload ?? {}) as { mode?: string };
+      const mode = payload.mode ?? 'INCREMENTAL';
+      const end = new Date();
+      end.setUTCDate(end.getUTCDate() - 3);
+      const dateText = (value: Date) => value.toISOString().slice(0, 10);
+      let days = mode === 'MANUAL_90D' ? 90 : 28;
+      if (mode === 'INCREMENTAL') {
+        const previous = await pool.query(
+          'SELECT last_finalized_date FROM gsc_sync_summaries WHERE site_id=$1',
+          [siteId],
+        );
+        if (previous.rows[0]?.last_finalized_date) {
+          const start = new Date(previous.rows[0].last_finalized_date);
+          start.setUTCDate(start.getUTCDate() - 2);
+          days = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / 86_400_000) + 1);
+        }
+      }
+      const start = new Date(end);
+      start.setUTCDate(start.getUTCDate() - (days - 1));
+      const run = await createGscSyncRun(
+        {
+          siteId,
+          propertyId: connection.property.id,
+          jobId: id,
+          mode,
+          startDate: dateText(start),
+          endDate: dateText(end),
+        },
+        database,
+      );
+      await recordJobEvent(
+        id,
+        'GSC_SYNC_STARTED',
+        { runId: run.id, mode, startDate: dateText(start), endDate: dateText(end) },
+        database,
+      );
+      let apiRequests = 0,
+        rowsReceived = 0,
+        rowsInserted = 0,
+        rowsUpdated = 0;
+      let coverage = 'COMPLETE_AS_RETURNED';
+      let cancelled = false;
+      try {
+        for (
+          let cursor = new Date(start);
+          cursor <= end && !cancelled;
+          cursor.setUTCDate(cursor.getUTCDate() + 1)
+        ) {
+          const date = dateText(cursor);
+          for (const dataset of GSC_DATASETS) {
+            const result = await fetchDatasetPages({
+              api,
+              propertyUri: connection.property.propertyUri,
+              date,
+              dataset,
+              shouldCancel: () => jobCancellationRequested(id, database),
+              onPage: async (rows) => {
+                for (let offset = 0; offset < rows.length; offset += 500) {
+                  const written = await upsertGscRows(
+                    dataset,
+                    { siteId, propertyId: connection.property!.id, searchType: 'web' },
+                    rows.slice(offset, offset + 500),
+                    pool,
+                  );
+                  rowsInserted += written.inserted;
+                  rowsUpdated += written.updated;
+                }
+              },
+            });
+            apiRequests += result.requests;
+            rowsReceived += result.rows;
+            if (result.coverage === 'POSSIBLY_TRUNCATED') coverage = 'POSSIBLY_TRUNCATED';
+            cancelled = result.cancelled;
+            await touchJobHeartbeat(id, database);
+            if (apiRequests % 10 === 0)
+              await recordJobEvent(
+                id,
+                'GSC_SYNC_PROGRESS',
+                { date, dataset, apiRequests, rowsReceived },
+                database,
+              );
+            if (cancelled) break;
+          }
+        }
+        const status = cancelled
+          ? 'CANCELLED'
+          : coverage === 'POSSIBLY_TRUNCATED'
+            ? 'PARTIAL'
+            : 'SUCCEEDED';
+        await finishGscSyncRun(
+          run.id,
+          {
+            status,
+            apiRequests,
+            rowsReceived,
+            rowsInserted,
+            rowsUpdated,
+            coverageStatus: cancelled ? 'PARTIAL' : coverage,
+          },
+          database,
+        );
+        if (!cancelled) {
+          await refreshGscSummary(siteId, connection.property.id, run.id, coverage, pool);
+          await refreshGscCrawlMappings(siteId, connection.property.id, pool);
+        }
+        await recordJobEvent(
+          id,
+          cancelled
+            ? 'GSC_SYNC_CANCELLED'
+            : status === 'PARTIAL'
+              ? 'GSC_SYNC_PARTIAL'
+              : 'GSC_SYNC_COMPLETED',
+          { runId: run.id, apiRequests, rowsReceived, rowsInserted, rowsUpdated, coverage },
+          database,
+        );
+        const result = { status, apiRequests, rowsReceived, rowsInserted, rowsUpdated, coverage };
+        if (cancelled)
+          return { state: 'CANCELLED' as const, job: await markJobCancelled(id, result, pool) };
+        return { state: 'SUCCEEDED' as const, job: await markJobSucceeded(id, result, pool) };
+      } catch (error) {
+        const safe = error instanceof Error ? error : new Error('Unknown GSC error');
+        const code = String((error as { code?: string }).code ?? 'GOOGLE_API_ERROR');
+        await finishGscSyncRun(
+          run.id,
+          {
+            status: 'FAILED',
+            apiRequests,
+            rowsReceived,
+            rowsInserted,
+            rowsUpdated,
+            coverageStatus: 'FAILED',
+            failureCode: code,
+            failureSummary: safe.message,
+          },
+          database,
+        );
+        await pool.query(
+          `UPDATE gsc_sync_summaries SET latest_status='FAILED',updated_at=now() WHERE site_id=$1`,
+          [siteId],
+        );
+        await recordJobEvent(
+          id,
+          'GSC_SYNC_FAILED',
+          { runId: run.id, code, summary: safe.message.slice(0, 200) },
+          database,
+        );
         throw error;
       }
     }

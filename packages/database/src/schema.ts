@@ -95,6 +95,9 @@ export const jobs = pgTable(
     uniqueIndex('jobs_one_opportunity_generation_per_site_idx')
       .on(t.siteId)
       .where(sql`${t.type} = 'GENERATE_OPPORTUNITIES' AND ${t.status} IN ('QUEUED','RUNNING')`),
+    uniqueIndex('jobs_one_ai_running_idx')
+      .on(t.type)
+      .where(sql`${t.type} = 'ANALYZE_OPPORTUNITY' AND ${t.status} = 'RUNNING'`),
   ],
 );
 export const jobEvents = pgTable(
@@ -554,6 +557,71 @@ export const opportunities = pgTable(
     index('opportunities_last_detected_idx').on(t.siteId, t.lastDetectedAt),
   ],
 );
+export const aiAnalysisRuns = pgTable(
+  'ai_analysis_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    opportunityId: uuid('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'cascade' }),
+    jobId: uuid('job_id')
+      .unique()
+      .references(() => jobs.id, { onDelete: 'set null' }),
+    reusedRunId: uuid('reused_run_id'),
+    status: text('status').notNull().default('QUEUED'),
+    analysisKey: text('analysis_key').notNull(),
+    evidenceHash: text('evidence_hash').notNull(),
+    opportunityFingerprint: text('opportunity_fingerprint').notNull(),
+    promptVersion: text('prompt_version').notNull(),
+    schemaVersion: text('schema_version').notNull(),
+    model: text('model').notNull(),
+    reasoningEffort: text('reasoning_effort').notNull(),
+    estimatedCostMicros: integer('estimated_cost_micros').notNull().default(0),
+    actualCostMicros: integer('actual_cost_micros').notNull().default(0),
+    inputTokens: integer('input_tokens').notNull().default(0),
+    cachedInputTokens: integer('cached_input_tokens').notNull().default(0),
+    outputTokens: integer('output_tokens').notNull().default(0),
+    providerRequestId: text('provider_request_id'),
+    latencyMs: integer('latency_ms'),
+    contextChars: integer('context_chars').notNull().default(0),
+    failureCode: text('failure_code'),
+    failureSummary: text('failure_summary'),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    index('ai_analysis_opportunity_created_idx').on(t.opportunityId, t.createdAt),
+    index('ai_analysis_site_created_idx').on(t.siteId, t.createdAt),
+    index('ai_analysis_reuse_idx').on(t.analysisKey, t.status, t.createdAt),
+    index('ai_analysis_status_idx').on(t.status, t.createdAt),
+  ],
+);
+export const aiRecommendations = pgTable(
+  'ai_recommendations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    analysisRunId: uuid('analysis_run_id')
+      .notNull()
+      .unique()
+      .references(() => aiAnalysisRuns.id, { onDelete: 'cascade' }),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    opportunityId: uuid('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'cascade' }),
+    verdict: text('verdict').notNull(),
+    confidence: text('confidence').notNull(),
+    summary: text('summary').notNull(),
+    result: jsonb('result').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('ai_recommendations_opportunity_idx').on(t.opportunityId, t.createdAt)],
+);
 export const approvals = pgTable(
   'approvals',
   {
@@ -574,14 +642,27 @@ export const aiUsage = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     siteId: uuid('site_id').references(() => sites.id, { onDelete: 'set null' }),
     jobId: uuid('job_id').references(() => jobs.id, { onDelete: 'set null' }),
+    opportunityId: uuid('opportunity_id').references(() => opportunities.id, {
+      onDelete: 'set null',
+    }),
+    analysisRunId: uuid('analysis_run_id').references(() => aiAnalysisRuns.id, {
+      onDelete: 'set null',
+    }),
     provider: text('provider').notNull(),
     model: text('model').notNull(),
+    promptVersion: text('prompt_version'),
     inputTokens: integer('input_tokens').notNull().default(0),
+    cachedInputTokens: integer('cached_input_tokens').notNull().default(0),
     outputTokens: integer('output_tokens').notNull().default(0),
     costMicros: integer('cost_micros').notNull().default(0),
+    status: text('status').notNull().default('SUCCEEDED'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('ai_usage_created_idx').on(t.createdAt)],
+  (t) => [
+    index('ai_usage_created_idx').on(t.createdAt),
+    index('ai_usage_site_created_idx').on(t.siteId, t.createdAt),
+    index('ai_usage_analysis_idx').on(t.analysisRunId),
+  ],
 );
 export const systemEvents = pgTable(
   'system_events',

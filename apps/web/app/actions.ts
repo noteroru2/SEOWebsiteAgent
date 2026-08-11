@@ -6,6 +6,7 @@ import {
   mapGscProperty,
   disconnectGsc,
   dismissOpportunity,
+  aiPanelForOpportunity,
 } from '@seo-agent/database';
 import { createSiteSchema } from '@seo-agent/shared';
 import { assertSafeTarget } from '@seo-agent/crawler';
@@ -85,4 +86,16 @@ export async function dismissOpportunityAction(opportunityId: string, siteId: st
   revalidatePath('/opportunities');
   revalidatePath(`/opportunities/${opportunityId}`);
   revalidatePath(`/sites/${siteId}`);
+}
+
+export async function enqueueAiAnalysis(opportunityId: string, siteId: string, reanalyze = false) {
+  if (!/^[0-9a-f-]{36}$/i.test(opportunityId) || !/^[0-9a-f-]{36}$/i.test(siteId))
+    throw new Error('Invalid opportunity');
+  const panel = await aiPanelForOpportunity(opportunityId);
+  if (!panel.configured) throw new Error('OPENAI_API_KEY is not configured');
+  await enqueueJob({ type: 'ANALYZE_OPPORTUNITY', siteId, opportunityId, reanalyze });
+  revalidatePath('/');
+  revalidatePath(`/opportunities/${opportunityId}`);
+  revalidatePath(`/sites/${siteId}`);
+  revalidatePath('/jobs');
 }

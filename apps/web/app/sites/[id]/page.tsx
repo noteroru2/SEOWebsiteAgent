@@ -1,6 +1,11 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { gscSiteStatus, siteDetail, siteOpportunitySummary } from '@seo-agent/database';
+import {
+  aiSpendSummary,
+  gscSiteStatus,
+  siteDetail,
+  siteOpportunitySummary,
+} from '@seo-agent/database';
 import { displayUtcTimestamp } from '@seo-agent/shared';
 import { cancelCrawl, enqueueOpportunityGeneration, enqueueSiteCrawl } from '../../actions';
 
@@ -14,10 +19,11 @@ export default async function SitePage({
 }) {
   const { id } = await params;
   const filters = await searchParams;
-  const [data, gsc, opportunities] = await Promise.all([
+  const [data, gsc, opportunities, aiSpend] = await Promise.all([
     siteDetail(id, filters),
     gscSiteStatus(id),
     siteOpportunitySummary(id),
+    aiSpendSummary(id),
   ]);
   if (!data) notFound();
   const summary = (data.latest?.summary ?? {}) as Record<string, unknown>;
@@ -112,6 +118,15 @@ export default async function SitePage({
         <div className="timing">
           Query {opportunities.timingMs.toFixed(1)} ms · top 3 persisted records
         </div>
+      </section>
+      <section className="panel compact section">
+        <h2>AI recommendation spend</h2>
+        <p className="hint">
+          This month: ${(Number(aiSpend.cost_micros) / 1_000_000).toFixed(4)} of $
+          {(Number(aiSpend.budgetMicros) / 1_000_000).toFixed(2)} · Analyses: {aiSpend.analyses}
+          {' · '}Average provider call: $
+          {(Number(aiSpend.average_cost_micros) / 1_000_000).toFixed(4)}
+        </p>
       </section>
       <div className="grid">
         <section className="panel">

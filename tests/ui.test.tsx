@@ -3,6 +3,45 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { gscSiteView, mapGscProperty } from '@seo-agent/database';
 
 vi.mock('@seo-agent/database', () => ({
+  aiSpendSummary: vi.fn(async () => ({
+    analyses: 1,
+    provider_calls: 1,
+    average_cost_micros: 4250,
+    cost_micros: 4250,
+    budgetMicros: 8_500_000,
+  })),
+  aiPanelForOpportunity: vi.fn(async () => ({
+    configured: true,
+    activeJob: null,
+    latest: {
+      status: 'SUCCEEDED',
+      verdict: 'INVESTIGATE',
+      recommendation_confidence: 'MEDIUM',
+      recommendation_summary: 'Review intent before changing the page.',
+      actual_cost_micros: 4250,
+      model: 'gpt-5.6-terra',
+      prompt_version: 'seo-recommendation-prompt-v1',
+      schema_version: 'seo-recommendation-schema-v1',
+      finished_at: new Date(),
+      latency_ms: 25,
+      result: {
+        evidence_used: [{ type: 'GSC', fact: '200 impressions at position 8.' }],
+        recommended_actions: [
+          {
+            action_type: 'REVIEW_SEARCH_INTENT',
+            title: 'Review intent',
+            description: 'Owner review only.',
+            risk: 'LOW',
+            expected_goal: 'Confirm query ownership.',
+            requires_human_review: true,
+          },
+        ],
+        unknowns: ['SERP features are unknown.'],
+        additional_evidence_needed: ['Review body content.'],
+        do_not_do: ['Do not promise rankings.'],
+      },
+    },
+  })),
   dashboardSummary: vi.fn(async () => ({
     sites: 1,
     running: 0,
@@ -235,6 +274,10 @@ describe('server-rendered UI foundations', () => {
     expect(detail).toContain('Structured evidence');
     expect(detail).toContain('What the system does not know');
     expect(detail).toContain('opportunity-engine-v1');
+    expect(detail).toContain('SEO recommendation');
+    expect(detail).toContain('REVIEW_SEARCH_INTENT');
+    expect(detail).toContain('HUMAN REVIEW REQUIRED');
+    expect(detail).not.toContain('OPENAI_API_KEY=');
   });
   it('renders bounded GSC data without credential material', async () => {
     const Page = (await import('../apps/web/app/sites/[id]/search-console/page')).default;

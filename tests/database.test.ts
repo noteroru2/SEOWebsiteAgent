@@ -43,6 +43,8 @@ suite('database, migrations, and queue', () => {
       'opportunity_runs',
       'approvals',
       'ai_usage',
+      'ai_analysis_runs',
+      'ai_recommendations',
       'system_events',
     ])
       expect(names).toContain(name);
@@ -80,6 +82,29 @@ suite('database, migrations, and queue', () => {
       claimNextJob('two', database.pool),
     ]);
     expect([first, second].filter(Boolean)).toHaveLength(1);
+  });
+  it('allows only one AI analysis to run across concurrent workers', async () => {
+    const site = await createSite(
+      { name: 'AI Queue', url: 'https://ai-queue.example.com' },
+      database.db,
+    );
+    const opportunities = await database.pool.query(
+      `INSERT INTO opportunities(site_id,kind,title,summary,fingerprint,engine_version)
+       VALUES($1,'LOW_CTR_QUERY','One','One','ai-one','opportunity-engine-v1'),
+             ($1,'LOW_CTR_QUERY','Two','Two','ai-two','opportunity-engine-v1') RETURNING id`,
+      [site.id],
+    );
+    for (const opportunity of opportunities.rows)
+      await enqueueJob(
+        { type: 'ANALYZE_OPPORTUNITY', siteId: site.id, opportunityId: opportunity.id },
+        database.db,
+      );
+    const [first, second] = await Promise.all([
+      claimNextJob('ai-worker-one', database.pool),
+      claimNextJob('ai-worker-two', database.pool),
+    ]);
+    expect([first, second].filter(Boolean)).toHaveLength(1);
+    expect((first ?? second)?.type).toBe('ANALYZE_OPPORTUNITY');
   });
   it('recovers stale RUNNING work without resetting attempts', async () => {
     const job = await enqueueJob({ type: 'SYSTEM_TEST' }, database.db);

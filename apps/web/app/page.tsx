@@ -1,5 +1,10 @@
 import Link from 'next/link';
-import { dashboardSummary, dashboardTopOpportunities, databaseHealthy } from '@seo-agent/database';
+import {
+  aiSpendSummary,
+  dashboardSummary,
+  dashboardTopOpportunities,
+  databaseHealthy,
+} from '@seo-agent/database';
 import { enqueueSystemTest } from './actions';
 
 export const dynamic = 'force-dynamic';
@@ -7,11 +12,13 @@ export default async function Dashboard() {
   let data: Awaited<ReturnType<typeof dashboardSummary>> | null = null;
   let dbHealthy = false;
   let top: Awaited<ReturnType<typeof dashboardTopOpportunities>> = { rows: [], timingMs: 0 };
+  let aiSpend: Awaited<ReturnType<typeof aiSpendSummary>> | null = null;
   try {
-    [data, dbHealthy, top] = await Promise.all([
+    [data, dbHealthy, top, aiSpend] = await Promise.all([
       dashboardSummary(),
       databaseHealthy(),
       dashboardTopOpportunities(),
+      aiSpendSummary(),
     ]);
   } catch {
     /* health state is rendered */
@@ -32,8 +39,28 @@ export default async function Dashboard() {
         <Stat label="Agent" value={data?.workerHealthy ? 'Active' : 'Idle'} />
         <Stat label="Jobs running" value={data?.running ?? 0} />
         <Stat label="Needs approval" value={data?.pending ?? 0} />
-        <Stat label="AI cost" value={`฿${((data?.aiCostMicros ?? 0) / 1_000_000).toFixed(2)}`} />
+        <Stat label="AI spend (month)" value={formatUsd(aiSpend?.cost_micros)} />
       </div>
+      <section className="panel compact section">
+        <div className="health ai-summary">
+          <div>
+            <span>AI analyses this month</span>
+            <strong>{aiSpend?.analyses ?? 0}</strong>
+          </div>
+          <div>
+            <span>Provider calls</span>
+            <strong>{aiSpend?.provider_calls ?? 0}</strong>
+          </div>
+          <div>
+            <span>Average call cost</span>
+            <strong>{formatUsd(aiSpend?.average_cost_micros)}</strong>
+          </div>
+          <div>
+            <span>Global monthly budget</span>
+            <strong>{formatUsd(aiSpend?.budgetMicros)}</strong>
+          </div>
+        </div>
+      </section>
       <div className="grid">
         <section className="panel">
           <h2>Recent jobs</h2>
@@ -111,6 +138,9 @@ export default async function Dashboard() {
       </section>
     </>
   );
+}
+function formatUsd(value: unknown) {
+  return `$${(Number(value ?? 0) / 1_000_000).toFixed(4)}`;
 }
 function Stat({ label, value }: { label: string; value: string | number }) {
   return (

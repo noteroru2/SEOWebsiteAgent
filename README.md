@@ -1,6 +1,6 @@
 # SEO Website Agent V1 — Low Resource Pilot
 
-Local-first foundation for a safe SEO operator. Batch 4 adds a deterministic opportunity engine over the crawler and read-only Google Search Console datasets. It does **not** call AI, generate content, edit managed repositories, deploy, or connect to Hetzner.
+Local-first foundation for a safe SEO operator. Batch 5 adds a bounded, manual AI recommendation layer over persisted deterministic opportunities. It does **not** generate or publish content, edit managed repositories, deploy, or connect to Hetzner.
 
 ## Architecture
 
@@ -12,6 +12,7 @@ Local-first foundation for a safe SEO operator. Batch 4 adds a deterministic opp
 - `packages/seo-engine`: deterministic indexability, issue detection, and compact summaries.
 - `packages/gsc`: OAuth security, encrypted credentials, Google REST adapter, bounded pagination, and metric aggregation.
 - `packages/opportunity-engine`: deterministic signal rules, scoring, stable fingerprints, suppression, and caps.
+- `packages/ai`: strict recommendation schema, bounded prompt/context contract, pricing, hashing, and the Responses API adapter.
 
 PostgreSQL is both the system of record and queue. Claiming uses a transaction, row locking and an advisory lock. A partial unique index enforces at most one heavy `RUNNING` job even with multiple worker processes. Jobs record attempts, timestamps, failures, heartbeats and immutable events. Stale work is returned to `QUEUED` without erasing its attempt count.
 
@@ -37,7 +38,7 @@ Open `http://localhost:3000`. Add a public HTTP(S) site on **Sites**, select **R
 
 ## Environment variables
 
-`.env.example` is authoritative and contains placeholders/local-only values. `DATABASE_URL` is required. Google connection additionally requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, and a 32-byte `APP_ENCRYPTION_KEY`. Missing Google configuration fails closed. Never commit real credentials.
+`.env.example` is authoritative and contains placeholders/local-only values. `DATABASE_URL` is required. Google connection additionally requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, and a 32-byte `APP_ENCRYPTION_KEY`. AI analysis additionally requires a server-only `OPENAI_API_KEY`; without it the manual action is disabled and fails closed. Never commit real credentials.
 
 ## Quality and operations
 
@@ -58,7 +59,7 @@ verify a test-only marker before any destructive reset. They never fall back to 
 
 Migrations are ordered SQL files in `packages/database/migrations` and applied through Drizzle. Crawl pages store structured SEO fields—not raw HTML—and GSC tables store normalized metrics—not raw API JSON. See [crawler documentation](docs/crawler.md), [technical SEO engine](docs/technical-seo-engine.md), and [Google Search Console](docs/google-search-console.md).
 
-Opportunity generation methodology, scoring, lifecycle, noise controls, and limitations are documented in [docs/opportunity-engine.md](docs/opportunity-engine.md).
+Opportunity generation methodology is documented in [docs/opportunity-engine.md](docs/opportunity-engine.md). The AI execution boundary, context, schema, budgets, reuse, provider safety, and pilot gate are documented in [docs/ai-recommendation-layer.md](docs/ai-recommendation-layer.md).
 
 ## Resource model
 
@@ -66,4 +67,4 @@ The eventual host is a Hetzner CX23 (2 vCPU, 4 GB RAM, 40 GB disk) shared with a
 
 ## Batch boundary
 
-Production deployment is explicitly **not part of Batch 4**. No deployment, Hetzner connection, Git push, OpenAI/LLM calls, automatic fixes, content generation, or managed-site repository modification is implemented. Batch 5 is not started.
+Production deployment is explicitly **not part of Batch 5**. No deployment, Hetzner connection, Git push, automatic fix, content generation, publishing, managed-site repository modification, or Batch 6 work is implemented. Provider calls are manual, single-opportunity, budget-gated, and owner-reviewed.

@@ -25,6 +25,10 @@ import {
   loadOpportunityInput,
   persistOpportunityResult,
   finishOpportunityRunFailure,
+  prepareAiAnalysis,
+  persistAiAnalysisSuccess,
+  persistAiAnalysisFailure,
+  recordAiFailedRequest,
   type Database,
 } from '@seo-agent/database';
 import { resourceGuardFromEnv, type ResourceGuard } from '@seo-agent/resource-guard';
@@ -39,6 +43,7 @@ import {
 } from '@seo-agent/shared';
 import type { Pool } from 'pg';
 import { generateOpportunitySet } from '@seo-agent/opportunity-engine';
+import { aiConfigFromEnv, OpenAiResponsesProvider, type ReasoningProvider } from '@seo-agent/ai';
 import {
   decryptSecret,
   encryptSecret,
@@ -54,6 +59,7 @@ export async function executeOne(
   pool: Pool,
   guard: ResourceGuard = resourceGuardFromEnv(),
   gscApiOverride?: SearchConsoleApi,
+  aiProviderOverride?: ReasoningProvider,
 ) {
   const resource = await guard.evaluate();
   if (!resource.allowed) return { state: 'RESOURCE_DENIED' as const, resource };
@@ -210,6 +216,125 @@ export async function executeOne(
           { runId: run.id, code, summary: safe.message.slice(0, 200) },
           database,
         );
+        throw error;
+      }
+    }
+    if (type === 'ANALYZE_OPPORTUNITY') {
+      const siteId = String(job.site_id ?? '');
+      const payload = (job.payload ?? {}) as { opportunityId?: string; reanalyze?: boolean };
+      if (!payload.opportunityId)
+        throw Object.assign(new Error('Opportunity id is required'), {
+          code: 'OPPORTUNITY_REQUIRED',
+        });
+      const config = aiConfigFromEnv();
+      let analysisRunId: string | undefined;
+      try {
+        const prepared = await prepareAiAnalysis(
+          {
+            jobId: id,
+            siteId,
+            opportunityId: payload.opportunityId,
+            force: payload.reanalyze === true,
+            config,
+          },
+          pool,
+        );
+        analysisRunId = String(prepared.run.id);
+        if (prepared.reused) {
+          const result = { analysisRunId, reusedRunId: prepared.reusedRunId, reused: true };
+          await recordJobEvent(id, 'AI_ANALYSIS_REUSED', result, database);
+          return { state: 'SUCCEEDED' as const, job: await markJobSucceeded(id, result, pool) };
+        }
+        await recordJobEvent(
+          id,
+          'AI_ANALYSIS_STARTED',
+          {
+            analysisRunId,
+            opportunityId: payload.opportunityId,
+            model: config.model,
+            promptVersion: prepared.run.prompt_version,
+          },
+          database,
+        );
+        if (await jobCancellationRequested(id, database))
+          throw Object.assign(new Error('Cancelled before provider request'), {
+            code: 'AI_CANCELLED',
+          });
+        const provider =
+          aiProviderOverride ?? new OpenAiResponsesProvider(process.env.OPENAI_API_KEY ?? '');
+        let analysis;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            analysis = await provider.analyze(
+              prepared.context,
+              config,
+              AbortSignal.timeout(Number(process.env.AI_REQUEST_TIMEOUT_MS ?? 60_000)),
+            );
+            break;
+          } catch (error) {
+            await recordAiFailedRequest(prepared.run, pool);
+            if (!(error as { transient?: boolean }).transient || attempt === 1) throw error;
+            await recordJobEvent(
+              id,
+              'AI_ANALYSIS_RETRY',
+              {
+                analysisRunId,
+                attempt: attempt + 1,
+                code: String((error as { code?: string }).code ?? 'AI_PROVIDER_ERROR'),
+              },
+              database,
+            );
+          }
+        }
+        if (!analysis)
+          throw Object.assign(new Error('AI provider returned no analysis'), {
+            code: 'AI_INCOMPLETE_RESPONSE',
+          });
+        if (await jobCancellationRequested(id, database))
+          throw Object.assign(new Error('Cancelled before recommendation persistence'), {
+            code: 'AI_CANCELLED',
+          });
+        const persisted = await persistAiAnalysisSuccess(prepared.run, analysis, pool);
+        const result = {
+          analysisRunId,
+          reused: false,
+          model: config.model,
+          verdict: analysis.result.verdict,
+          confidence: analysis.result.confidence,
+          inputTokens: analysis.inputTokens,
+          cachedInputTokens: analysis.cachedInputTokens,
+          outputTokens: analysis.outputTokens,
+          latencyMs: analysis.latencyMs,
+          costMicros: persisted.costMicros,
+        };
+        await recordJobEvent(id, 'AI_ANALYSIS_COMPLETED', result, database);
+        return { state: 'SUCCEEDED' as const, job: await markJobSucceeded(id, result, pool) };
+      } catch (error) {
+        const code = String((error as { code?: string }).code ?? 'AI_PROVIDER_ERROR');
+        const summary = error instanceof Error ? error.message : 'AI analysis failed';
+        analysisRunId ??= (error as { analysisRunId?: string }).analysisRunId;
+        if (analysisRunId && code !== 'AI_BUDGET_EXCEEDED')
+          await persistAiAnalysisFailure(analysisRunId, code, summary, pool);
+        await recordJobEvent(
+          id,
+          code === 'AI_BUDGET_EXCEEDED'
+            ? 'AI_BUDGET_BLOCKED'
+            : code === 'AI_CANCELLED'
+              ? 'AI_ANALYSIS_CANCELLED'
+              : 'AI_ANALYSIS_FAILED',
+          {
+            analysisRunId,
+            opportunityId: payload.opportunityId,
+            code,
+            summary: summary.slice(0, 200),
+          },
+          database,
+        );
+        if (code === 'AI_CANCELLED')
+          return {
+            state: 'CANCELLED' as const,
+            job: await markJobCancelled(id, { analysisRunId }, pool),
+          };
         throw error;
       }
     }

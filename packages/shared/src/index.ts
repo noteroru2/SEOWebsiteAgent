@@ -97,6 +97,7 @@ export const jobTypes = [
   'SITE_CRAWL',
   'GSC_SYNC',
   'GENERATE_OPPORTUNITIES',
+  'ANALYZE_OPPORTUNITY',
 ] as const;
 export type JobType = (typeof jobTypes)[number];
 
@@ -122,6 +123,8 @@ export const enqueueJobSchema = z
     type: z.enum(jobTypes),
     siteId: z.string().uuid().optional(),
     mode: z.enum(['BOOTSTRAP_28D', 'MANUAL_90D', 'INCREMENTAL']).optional(),
+    opportunityId: z.string().uuid().optional(),
+    reanalyze: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {
     if (['SITE_CRAWL', 'GSC_SYNC', 'GENERATE_OPPORTUNITIES'].includes(value.type) && !value.siteId)
@@ -129,6 +132,12 @@ export const enqueueJobSchema = z
         code: 'custom',
         path: ['siteId'],
         message: `${value.type} requires a siteId`,
+      });
+    if (value.type === 'ANALYZE_OPPORTUNITY' && (!value.siteId || !value.opportunityId))
+      ctx.addIssue({
+        code: 'custom',
+        path: ['opportunityId'],
+        message: 'ANALYZE_OPPORTUNITY requires siteId and opportunityId',
       });
   });
 

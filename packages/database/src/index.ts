@@ -8,6 +8,7 @@ import * as schema from './schema';
 
 export * from './schema';
 export * from './opportunities';
+export * from './ai-recommendations';
 export type Database = ReturnType<typeof drizzle<typeof schema>>;
 let singleton: { pool: Pool; db: Database } | undefined;
 
@@ -33,16 +34,26 @@ export async function createSite(input: unknown, database = getDatabase().db) {
 
 export async function enqueueJob(input: unknown, database = getDatabase().db) {
   const value = enqueueJobSchema.parse(input);
+  const deduplicatedTypes = ['GSC_SYNC', 'GENERATE_OPPORTUNITIES', 'ANALYZE_OPPORTUNITY'];
   const insert = database.insert(schema.jobs).values({
     type: value.type,
     siteId: value.siteId,
-    heavy: !['GSC_SYNC', 'GENERATE_OPPORTUNITIES'].includes(value.type),
-    payload: value.mode ? { mode: value.mode } : {},
+    heavy: !deduplicatedTypes.includes(value.type),
+    payload:
+      value.type === 'ANALYZE_OPPORTUNITY'
+        ? { opportunityId: value.opportunityId, reanalyze: value.reanalyze === true }
+        : value.mode
+          ? { mode: value.mode }
+          : {},
   });
-  const [job] = ['GSC_SYNC', 'GENERATE_OPPORTUNITIES'].includes(value.type)
+  const [job] = deduplicatedTypes.includes(value.type)
     ? await insert.onConflictDoNothing().returning()
     : await insert.returning();
-  if (!job && ['GSC_SYNC', 'GENERATE_OPPORTUNITIES'].includes(value.type) && value.siteId) {
+  if (!job && deduplicatedTypes.includes(value.type) && value.siteId) {
+    const opportunityCondition =
+      value.type === 'ANALYZE_OPPORTUNITY'
+        ? sql`${schema.jobs.payload}->>'opportunityId' = ${value.opportunityId}`
+        : undefined;
     const [active] = await database
       .select()
       .from(schema.jobs)
@@ -51,6 +62,7 @@ export async function enqueueJob(input: unknown, database = getDatabase().db) {
           eq(schema.jobs.siteId, value.siteId),
           eq(schema.jobs.type, value.type),
           inArray(schema.jobs.status, ['QUEUED', 'RUNNING']),
+          opportunityCondition,
         ),
       )
       .orderBy(desc(schema.jobs.createdAt))
@@ -281,7 +293,15 @@ export async function claimNextJob(workerId: string, pool = getDatabase().pool) 
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock(820241)');
     const result = await client.query(
-      `UPDATE jobs SET status='RUNNING', worker_id=$1, attempt_count=attempt_count+1, started_at=NOW(), heartbeat_at=NOW(), updated_at=NOW() WHERE id=(SELECT id FROM jobs WHERE status='QUEUED' AND available_at<=NOW() AND attempt_count<max_attempts AND (heavy=false OR NOT EXISTS (SELECT 1 FROM jobs WHERE status='RUNNING' AND heavy=true)) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`,
+      `UPDATE jobs SET status='RUNNING', worker_id=$1, attempt_count=attempt_count+1, started_at=NOW(), heartbeat_at=NOW(), updated_at=NOW()
+       WHERE id=(SELECT candidate.id FROM jobs candidate
+        WHERE candidate.status='QUEUED' AND candidate.available_at<=NOW()
+         AND candidate.attempt_count<candidate.max_attempts
+         AND (candidate.heavy=false OR NOT EXISTS (SELECT 1 FROM jobs running WHERE running.status='RUNNING' AND running.heavy=true))
+         AND (candidate.type<>'ANALYZE_OPPORTUNITY' OR NOT EXISTS (
+           SELECT 1 FROM jobs running_ai WHERE running_ai.status='RUNNING' AND running_ai.type='ANALYZE_OPPORTUNITY'
+         ))
+        ORDER BY candidate.created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`,
       [workerId],
     );
     if (result.rows[0])
@@ -510,6 +530,7 @@ export const registeredJobTypes: ReadonlySet<JobType> = new Set([
   'SITE_CRAWL',
   'GSC_SYNC',
   'GENERATE_OPPORTUNITIES',
+  'ANALYZE_OPPORTUNITY',
 ]);
 
 export async function createGscOAuthState(

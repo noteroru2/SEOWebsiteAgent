@@ -5,6 +5,7 @@ import {
   exchangeGoogleCode,
   GoogleSearchConsoleApi,
   hashOAuthState,
+  oauthCompletionUrl,
   GSC_READONLY_SCOPE,
 } from '@seo-agent/gsc';
 
@@ -29,12 +30,8 @@ export async function GET(request: Request) {
       scope: GSC_READONLY_SCOPE,
       properties,
     });
-    return NextResponse.redirect(
-      new URL(`/sites/${savedState.siteId}/search-console?connected=1`, request.url),
-    );
+    return NextResponse.redirect(oauthCompletionUrl(savedState.siteId, 'success'));
   } catch {
-    return NextResponse.redirect(
-      new URL(`/sites/${savedState.siteId}/search-console?error=oauth`, request.url),
-    );
+    return NextResponse.redirect(oauthCompletionUrl(savedState.siteId, 'error'));
   }
 }

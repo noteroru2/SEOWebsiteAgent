@@ -49,4 +49,8 @@ export const envSchema = z.object({
     (value) => (value === '' ? undefined : value),
     z.string().url().optional(),
   ),
+  APP_BASE_URL: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.string().url().optional(),
+  ),
 });

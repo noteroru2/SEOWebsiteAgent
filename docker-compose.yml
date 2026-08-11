@@ -26,6 +26,7 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:3000/api/google/callback}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
     ports:
       - '3000:3000'
@@ -50,6 +51,7 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:3000/api/google/callback}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
     depends_on:
       migrate: { condition: service_completed_successfully }

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   aggregateMetrics,
+  applicationBaseUrl,
   conservativePageUrl,
   createOAuthState,
   decryptSecret,
@@ -10,6 +11,7 @@ import {
   GSC_READONLY_SCOPE,
   GoogleSearchConsoleApi,
   hashOAuthState,
+  oauthCompletionUrl,
   refreshGoogleToken,
   type SearchConsoleApi,
 } from '@seo-agent/gsc';
@@ -46,6 +48,23 @@ describe('Google Search Console security and metrics', () => {
     expect(url.searchParams.get('scope')).toBe(GSC_READONLY_SCOPE);
     expect(url.searchParams.get('access_type')).toBe('offline');
     expect(url.searchParams.has('client_secret')).toBe(false);
+  });
+  it('separates the server bind host from browser OAuth redirects', () => {
+    const previousHostname = process.env.HOSTNAME;
+    const previousBase = process.env.APP_BASE_URL;
+    process.env.HOSTNAME = '0.0.0.0';
+    delete process.env.APP_BASE_URL;
+    const success = oauthCompletionUrl('site-id', 'success').toString();
+    const failure = oauthCompletionUrl('site-id', 'error').toString();
+    expect(success).toBe('http://localhost:3000/sites/site-id/search-console?connected=1');
+    expect(failure).toBe('http://localhost:3000/sites/site-id/search-console?error=oauth');
+    expect(success).not.toContain('0.0.0.0');
+    expect(failure).not.toContain('0.0.0.0');
+    expect(() => applicationBaseUrl('http://0.0.0.0:3000')).toThrow(/bind address/);
+    if (previousHostname === undefined) delete process.env.HOSTNAME;
+    else process.env.HOSTNAME = previousHostname;
+    if (previousBase === undefined) delete process.env.APP_BASE_URL;
+    else process.env.APP_BASE_URL = previousBase;
   });
   it('uses impression-weighted position and aggregate CTR', () =>
     expect(

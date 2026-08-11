@@ -30,6 +30,23 @@ export interface SearchConsoleApi {
   query(request: SearchAnalyticsRequest): Promise<{ rows: GscMetricRow[] }>;
 }
 
+export function applicationBaseUrl(value = process.env.APP_BASE_URL ?? 'http://localhost:3000') {
+  const url = new URL(value);
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
+    throw new Error('APP_BASE_URL must be a browser-safe HTTP(S) origin');
+  if (['0.0.0.0', '::', '[::]'].includes(url.hostname))
+    throw new Error('APP_BASE_URL cannot use a server bind address');
+  return url.origin;
+}
+
+export function oauthCompletionUrl(siteId: string, outcome: 'success' | 'error', baseUrl?: string) {
+  const query = outcome === 'success' ? 'connected=1' : 'error=oauth';
+  return new URL(
+    `/sites/${encodeURIComponent(siteId)}/search-console?${query}`,
+    applicationBaseUrl(baseUrl),
+  );
+}
+
 function encryptionKey(value = process.env.APP_ENCRYPTION_KEY) {
   if (!value)
     throw Object.assign(new Error('APP_ENCRYPTION_KEY is required'), { code: 'AUTH_REQUIRED' });

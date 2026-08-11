@@ -6,6 +6,8 @@ Batch 3 adds a read-only Google Search Console data pipeline. It uses the OAuth 
 
 Create a Google Cloud OAuth web application, enable the Search Console API, and register `http://localhost:3000/api/google/callback` as an authorized redirect. Configure `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, and an explicitly generated `APP_ENCRYPTION_KEY`. Production can later use `https://<agent-domain>/api/google/callback`; no production deployment is included here.
 
+`APP_BASE_URL` is the browser-facing canonical origin and defaults locally to `http://localhost:3000`. It is intentionally separate from the web server's `0.0.0.0` bind host. OAuth success and failure redirects always use this canonical origin.
+
 Connect from a site's Search Console page. The callback validates a one-time, hashed, ten-minute state before exchanging the code. Offline access is requested so a refresh token can support worker syncs. Access and refresh tokens are authenticated-encrypted in PostgreSQL and are never selected by UI queries. Disconnect clears local token ciphertext and disables future syncs while preserving historical metrics.
 
 ## Properties and sync policy

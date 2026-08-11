@@ -4,17 +4,15 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { ResourceGuard } from '@seo-agent/resource-guard';
 import { executeOne } from '../apps/worker/src/runner';
 import { startFixture } from './fixture-server';
+import { requireTestDatabaseUrl, resetTestDatabase } from '../packages/database/src/test-safety';
 
-const url =
-  process.env.TEST_DATABASE_URL ??
-  process.env.DATABASE_URL ??
-  'postgresql://seo_agent:local_only_change_me@127.0.0.1:55432/seo_agent';
+const url = requireTestDatabaseUrl();
 const suite = describe;
 suite('SYSTEM_TEST end-to-end smoke', () => {
   const database = createDatabase(url);
   beforeAll(async () => {
     await migrate(database.db, { migrationsFolder: 'packages/database/migrations' });
-    await database.pool.query('TRUNCATE job_events,jobs CASCADE');
+    await resetTestDatabase(database.pool);
   });
   afterAll(async () => database.pool.end());
   it('flows from queue through worker to persisted success', async () => {
@@ -46,9 +44,7 @@ describe('SITE_CRAWL queue integration', () => {
   beforeAll(async () => {
     process.env.SEO_AGENT_TEST_FIXTURE = '1';
     await migrate(database.db, { migrationsFolder: 'packages/database/migrations' });
-    await database.pool.query(
-      'TRUNCATE seo_issues,crawl_pages,crawl_runs,job_events,jobs,sites CASCADE',
-    );
+    await resetTestDatabase(database.pool);
     fixture = await startFixture();
   });
   afterAll(async () => {

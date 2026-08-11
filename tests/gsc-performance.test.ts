@@ -3,11 +3,9 @@ import { createDatabase, createSite, saveGscConnection, upsertGscRows } from '@s
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { encryptSecret, fetchDatasetPages } from '@seo-agent/gsc';
 import { FakeSearchConsoleApi } from './fake-gsc-api';
+import { requireTestDatabaseUrl, resetTestDatabase } from '../packages/database/src/test-safety';
 
-const url =
-  process.env.TEST_DATABASE_URL ??
-  process.env.DATABASE_URL ??
-  'postgresql://seo_agent:local_only_change_me@127.0.0.1:55432/seo_agent';
+const url = requireTestDatabaseUrl();
 describe('GSC 50K bounded ingestion performance', () => {
   const database = createDatabase(url);
   let siteId = '';
@@ -17,6 +15,7 @@ describe('GSC 50K bounded ingestion performance', () => {
   beforeAll(async () => {
     process.env.APP_ENCRYPTION_KEY = key;
     await migrate(database.db, { migrationsFolder: 'packages/database/migrations' });
+    await resetTestDatabase(database.pool);
     const suffix = crypto.randomUUID();
     const site = await createSite(
       { name: '50K Fixture', url: `https://perf-${suffix}.example.com` },
@@ -43,12 +42,6 @@ describe('GSC 50K bounded ingestion performance', () => {
   });
   afterAll(async () => {
     delete process.env.APP_ENCRYPTION_KEY;
-    if (siteId) await database.pool.query('DELETE FROM sites WHERE id=$1', [siteId]);
-    if (propertyUri)
-      await database.pool.query(
-        'DELETE FROM gsc_properties WHERE property_uri=$1 AND connection_id IS NULL',
-        [propertyUri],
-      );
     await database.pool.end();
   });
   it('streams and chunk-upserts 50,000 rows without retaining the dataset', async () => {

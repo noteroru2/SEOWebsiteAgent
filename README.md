@@ -42,6 +42,7 @@ Open `http://localhost:3000`. Add a public HTTP(S) site on **Sites**, select **R
 
 ```powershell
 npm.cmd run db:migrate
+npm.cmd run db:test:prepare
 npm.cmd run lint
 npm.cmd run format:check
 npm.cmd run typecheck
@@ -49,6 +50,10 @@ npm.cmd test
 npm.cmd run test:e2e
 npm.cmd run build
 ```
+
+Database-backed tests fail closed unless `TEST_DATABASE_URL` explicitly targets a database whose
+name ends in `_test`. `npm test` and `npm run test:e2e` create/migrate that separate database and
+verify a test-only marker before any destructive reset. They never fall back to `DATABASE_URL`.
 
 Migrations are ordered SQL files in `packages/database/migrations` and applied through Drizzle. Crawl pages store structured SEO fields—not raw HTML—and GSC tables store normalized metrics—not raw API JSON. See [crawler documentation](docs/crawler.md), [technical SEO engine](docs/technical-seo-engine.md), and [Google Search Console](docs/google-search-console.md).
 

@@ -11,11 +11,10 @@ import {
   touchJobHeartbeat,
 } from '@seo-agent/database';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import { sql } from 'drizzle-orm';
+import { requireTestDatabaseUrl, resetTestDatabase } from '../packages/database/src/test-safety';
 
-const url =
-  process.env.TEST_DATABASE_URL ??
-  process.env.DATABASE_URL ??
-  'postgresql://seo_agent:local_only_change_me@127.0.0.1:55432/seo_agent';
+const url = requireTestDatabaseUrl();
 const suite = describe;
 suite('database, migrations, and queue', () => {
   const database = createDatabase(url);
@@ -23,9 +22,7 @@ suite('database, migrations, and queue', () => {
     await migrate(database.db, { migrationsFolder: 'packages/database/migrations' });
   });
   beforeEach(async () => {
-    await database.pool.query(
-      'TRUNCATE system_events,ai_usage,approvals,opportunities,seo_issues,crawl_pages,crawl_runs,job_events,jobs,site_repositories,sites CASCADE',
-    );
+    await resetTestDatabase(database.pool);
   });
   afterAll(async () => database.pool.end());
 
@@ -104,5 +101,36 @@ suite('database, migrations, and queue', () => {
       running.id,
     ]);
     expect(result.rows[0].heartbeat_at).toBeTruthy();
+  });
+  it('coalesces a duplicate GSC bootstrap while a fresh-site sync is queued', async () => {
+    await database.db.transaction(async (tx) => {
+      const txDatabase = tx as unknown as typeof database.db;
+      const site = await createSite(
+        { name: 'Fresh GSC Site', url: 'https://example.com' },
+        txDatabase,
+      );
+      const queued = await enqueueJob(
+        { type: 'GSC_SYNC', siteId: site.id, mode: 'INCREMENTAL' },
+        txDatabase,
+      );
+      const duplicate = await enqueueJob(
+        { type: 'GSC_SYNC', siteId: site.id, mode: 'BOOTSTRAP_28D' },
+        txDatabase,
+      );
+
+      expect(duplicate.id).toBe(queued.id);
+      const jobs = (await tx.execute(
+        sql`SELECT payload FROM jobs WHERE site_id=${site.id} AND type='GSC_SYNC'`,
+      )) as unknown as { rows: Array<{ payload: { mode: string } }> };
+      expect(jobs.rows).toHaveLength(1);
+      expect(jobs.rows[0]!.payload.mode).toBe('INCREMENTAL');
+      const events = (await tx.execute(
+        sql`SELECT event FROM job_events WHERE job_id=${queued.id} ORDER BY created_at`,
+      )) as unknown as { rows: Array<{ event: string }> };
+      expect(events.rows.map((row) => row.event)).toEqual(['ENQUEUED']);
+
+      await tx.execute(sql`DELETE FROM jobs WHERE id=${queued.id}`);
+      await tx.execute(sql`DELETE FROM sites WHERE id=${site.id}`);
+    });
   });
 });

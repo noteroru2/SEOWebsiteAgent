@@ -2,6 +2,10 @@
 
 The pilot is a small npm-workspaces monorepo with three runtime processes: Next.js web, PostgreSQL, and one TypeScript worker. PostgreSQL is both system of record and persistent queue, avoiding Redis or another service.
 
+Automated database tests use a separately created and migrated `seo_agent_test` database in the
+same PostgreSQL instance. Destructive test reset is fail-closed behind explicit environment,
+database-name, live-connection, and marker checks; it cannot fall back to the development database.
+
 ## Data flow
 
 1. A validated server action inserts a heavy `SITE_CRAWL` job.

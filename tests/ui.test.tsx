@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { gscSiteView, mapGscProperty } from '@seo-agent/database';
 
 vi.mock('@seo-agent/database', () => ({
   dashboardSummary: vi.fn(async () => ({
@@ -21,6 +22,7 @@ vi.mock('@seo-agent/database', () => ({
   enqueueJob: vi.fn(),
   createSite: vi.fn(),
   requestJobCancellation: vi.fn(),
+  mapGscProperty: vi.fn(),
   getSite: vi.fn(async () => ({
     id: '11111111-1111-4111-8111-111111111111',
     name: 'Fixture Site',
@@ -155,5 +157,110 @@ describe('server-rendered UI foundations', () => {
     expect(html).toContain('2026-08-06 – 2026-08-08');
     expect(html).not.toContain('refresh_token');
     expect(html).not.toContain('access_token');
+    expect(mapGscProperty).not.toHaveBeenCalled();
+  });
+  it('server-renders a fresh connected GSC site while its first sync is queued', async () => {
+    vi.mocked(gscSiteView).mockResolvedValueOnce({
+      connection: { id: 'connection', status: 'CONNECTED' },
+      properties: [
+        {
+          id: 'property',
+          property_uri: 'sc-domain:example.com',
+          permission_level: 'siteOwner',
+          selected: true,
+        },
+      ],
+      summary: null,
+      latestJob: {
+        status: 'QUEUED',
+        mode: 'INCREMENTAL',
+        failure_code: null,
+        failure_summary: null,
+      },
+      runs: [],
+      queries: [],
+      pages: [],
+      queryPages: [],
+      timingMs: 1,
+    } as never);
+    const Page = (await import('../apps/web/app/sites/[id]/search-console/page')).default;
+
+    const html = renderToStaticMarkup(
+      await Page({
+        params: Promise.resolve({ id: '11111111-1111-4111-8111-111111111111' }),
+        searchParams: Promise.resolve({}),
+      }),
+    );
+
+    expect(html).toContain('Sync status: QUEUED');
+    expect(html).toContain('A Search Console sync is queued.');
+    expect(html).not.toContain('Bootstrap 28 Days');
+    expect(html).not.toContain('Sync Now');
+  });
+  it.each([
+    'NOT_CONNECTED',
+    'CONNECTED_NO_SYNC',
+    'QUEUED',
+    'RUNNING',
+    'SUCCEEDED',
+    'PARTIAL',
+    'FAILED',
+    'CANCELLED',
+  ])('server-renders the %s GSC transitional state', async (status) => {
+    const connected = status !== 'NOT_CONNECTED';
+    const jobStatus = ['QUEUED', 'RUNNING', 'FAILED', 'CANCELLED'].includes(status) ? status : null;
+    const runStatus = ['SUCCEEDED', 'PARTIAL'].includes(status) ? status : null;
+    vi.mocked(gscSiteView).mockResolvedValueOnce({
+      connection: connected ? { id: 'connection', status: 'CONNECTED' } : null,
+      properties: connected
+        ? [
+            {
+              id: 'property',
+              property_uri: 'sc-domain:example.com',
+              permission_level: 'siteOwner',
+              selected: true,
+            },
+          ]
+        : [],
+      summary: null,
+      latestJob: jobStatus
+        ? {
+            status: jobStatus,
+            mode: 'BOOTSTRAP_28D',
+            failure_code: status === 'FAILED' ? 'GOOGLE_API_ERROR' : null,
+            failure_summary: null,
+          }
+        : null,
+      runs: runStatus
+        ? [
+            {
+              id: 'run',
+              status: runStatus,
+              mode: 'BOOTSTRAP_28D',
+              start_date: null,
+              end_date: null,
+              api_requests: 0,
+              rows_received: 0,
+              coverage_status: runStatus === 'PARTIAL' ? 'POSSIBLY_TRUNCATED' : null,
+            },
+          ]
+        : [],
+      queries: [],
+      pages: [],
+      queryPages: [],
+      timingMs: 1,
+    } as never);
+    const Page = (await import('../apps/web/app/sites/[id]/search-console/page')).default;
+
+    const html = renderToStaticMarkup(
+      await Page({
+        params: Promise.resolve({ id: '11111111-1111-4111-8111-111111111111' }),
+        searchParams: Promise.resolve({}),
+      }),
+    );
+
+    expect(html).toContain('Google Search Console');
+    if (status === 'NOT_CONNECTED') expect(html).toContain('Status: Not connected');
+    else expect(html).toContain(`Sync status: ${status}`);
   });
 });

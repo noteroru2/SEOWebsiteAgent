@@ -15,11 +15,9 @@ import { encryptSecret } from '@seo-agent/gsc';
 import { ResourceGuard } from '@seo-agent/resource-guard';
 import { executeOne } from '../apps/worker/src/runner';
 import { FakeSearchConsoleApi } from './fake-gsc-api';
+import { requireTestDatabaseUrl, resetTestDatabase } from '../packages/database/src/test-safety';
 
-const url =
-  process.env.TEST_DATABASE_URL ??
-  process.env.DATABASE_URL ??
-  'postgresql://seo_agent:local_only_change_me@127.0.0.1:55432/seo_agent';
+const url = requireTestDatabaseUrl();
 const key = Buffer.alloc(32, 9).toString('base64');
 describe('GSC fake full pipeline', () => {
   const database = createDatabase(url);
@@ -40,6 +38,7 @@ describe('GSC fake full pipeline', () => {
   beforeAll(async () => {
     process.env.APP_ENCRYPTION_KEY = key;
     await migrate(database.db, { migrationsFolder: 'packages/database/migrations' });
+    await resetTestDatabase(database.pool);
     const suffix = crypto.randomUUID();
     const site = await createSite(
       { name: 'GSC Fixture', url: `https://gsc-${suffix}.example.com` },
@@ -67,16 +66,31 @@ describe('GSC fake full pipeline', () => {
       JSON.stringify({ combinedBoundedViewMs: Math.round(view.timingMs * 100) / 100 }),
     );
     propertyId = view.properties[0].id;
+    const mappedPropertyUri = view.properties[0].property_uri;
+    const discoveryEvents = await database.pool.query(
+      `SELECT count(*)::int count FROM system_events
+       WHERE event='GSC_PROPERTY_MAPPED' AND detail->>'siteId'=$1`,
+      [siteId],
+    );
+    expect(discoveryEvents.rows[0].count).toBe(0);
     await mapGscProperty(siteId, propertyId, database.db);
+    const mappingEvents = await database.pool.query(
+      `SELECT detail FROM system_events
+       WHERE event='GSC_PROPERTY_MAPPED' AND detail->>'siteId'=$1`,
+      [siteId],
+    );
+    expect(mappingEvents.rows).toEqual([
+      {
+        detail: {
+          siteId,
+          propertyUri: mappedPropertyUri,
+          source: 'USER_SELECTED',
+        },
+      },
+    ]);
   });
   afterAll(async () => {
     delete process.env.APP_ENCRYPTION_KEY;
-    if (siteId) await database.pool.query('DELETE FROM sites WHERE id=$1', [siteId]);
-    if (propertyUri)
-      await database.pool.query(
-        'DELETE FROM gsc_properties WHERE connection_id IS NULL AND (property_uri=$1 OR property_uri=$2)',
-        [propertyUri, `${propertyUri.replace('sc-domain:', 'https://')}/`],
-      );
     await database.pool.end();
   });
   it('ingests 10K detailed rows, summarizes, and is idempotent', async () => {

@@ -24,6 +24,15 @@ export default async function SearchConsolePage({
   const delta = (data.summary?.deltas ?? {}) as Record<string, unknown>;
   const connected = data.connection?.status === 'CONNECTED';
   const selected = data.properties.find((item) => item.selected);
+  const activeSync = ['QUEUED', 'RUNNING'].includes(data.latestJob?.status ?? '');
+  const latestRun = data.runs[0];
+  const syncStatus = activeSync
+    ? data.latestJob.status
+    : ['FAILED', 'CANCELLED'].includes(data.latestJob?.status ?? '')
+      ? data.latestJob.status
+      : (latestRun?.status ??
+        data.summary?.latest_status ??
+        (connected ? 'CONNECTED_NO_SYNC' : 'NOT_CONNECTED'));
   return (
     <>
       <div className="heading">
@@ -73,6 +82,14 @@ export default async function SearchConsolePage({
           </form>
         )}
         {selected && (
+          <p className={`notice ${syncStatus === 'FAILED' ? 'danger-text' : ''}`}>
+            Sync status: {syncStatus}. {syncStateMessage(syncStatus)}
+            {syncStatus === 'FAILED' && data.latestJob?.failure_code
+              ? ` (${data.latestJob.failure_code})`
+              : ''}
+          </p>
+        )}
+        {selected && !activeSync && (
           <div className="filters">
             <form action={enqueueGscSync.bind(null, id, 'INCREMENTAL')}>
               <button>Sync Now</button>
@@ -246,4 +263,25 @@ function MetricTable({
       </tbody>
     </table>
   );
+}
+
+function syncStateMessage(status: string) {
+  switch (status) {
+    case 'QUEUED':
+      return 'A Search Console sync is queued.';
+    case 'RUNNING':
+      return 'Search Console data is currently syncing.';
+    case 'SUCCEEDED':
+      return 'The latest Search Console sync completed.';
+    case 'PARTIAL':
+      return 'The latest sync completed with partial coverage.';
+    case 'FAILED':
+      return 'The latest sync failed; existing data remains available.';
+    case 'CANCELLED':
+      return 'The latest sync was cancelled; existing data remains available.';
+    case 'CONNECTED_NO_SYNC':
+      return 'Google is connected and ready for its first sync.';
+    default:
+      return 'Connect Google to begin syncing Search Console data.';
+  }
 }

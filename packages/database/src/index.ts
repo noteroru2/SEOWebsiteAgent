@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, lt, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, lt, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool, type PoolClient } from 'pg';
 import { createSiteSchema, enqueueJobSchema, type JobType } from '@seo-agent/shared';
@@ -32,15 +32,32 @@ export async function createSite(input: unknown, database = getDatabase().db) {
 
 export async function enqueueJob(input: unknown, database = getDatabase().db) {
   const value = enqueueJobSchema.parse(input);
-  const [job] = await database
-    .insert(schema.jobs)
-    .values({
-      type: value.type,
-      siteId: value.siteId,
-      heavy: value.type !== 'GSC_SYNC',
-      payload: value.mode ? { mode: value.mode } : {},
-    })
-    .returning();
+  const insert = database.insert(schema.jobs).values({
+    type: value.type,
+    siteId: value.siteId,
+    heavy: value.type !== 'GSC_SYNC',
+    payload: value.mode ? { mode: value.mode } : {},
+  });
+  const [job] =
+    value.type === 'GSC_SYNC'
+      ? await insert.onConflictDoNothing().returning()
+      : await insert.returning();
+  if (!job && value.type === 'GSC_SYNC' && value.siteId) {
+    const [active] = await database
+      .select()
+      .from(schema.jobs)
+      .where(
+        and(
+          eq(schema.jobs.siteId, value.siteId),
+          eq(schema.jobs.type, 'GSC_SYNC'),
+          inArray(schema.jobs.status, ['QUEUED', 'RUNNING']),
+        ),
+      )
+      .orderBy(desc(schema.jobs.createdAt))
+      .limit(1);
+    if (active) return active;
+    throw new Error('Active GSC sync could not be resolved');
+  }
   await database.insert(schema.jobEvents).values({ jobId: job!.id, event: 'ENQUEUED' });
   return job!;
 }
@@ -606,6 +623,12 @@ export async function mapGscProperty(
       set: { propertyId, connectionId: connection.id, syncEnabled: true, updatedAt: new Date() },
     })
     .returning();
+  await database.insert(schema.systemEvents).values({
+    source: 'gsc',
+    level: 'INFO',
+    event: 'GSC_PROPERTY_MAPPED',
+    detail: { siteId, propertyUri: property.propertyUri, source: 'USER_SELECTED' },
+  });
   return mapped!;
 }
 
@@ -838,40 +861,46 @@ export async function gscSiteView(
   pool = getDatabase().pool,
 ) {
   const started = performance.now();
-  const [connection, properties, summary, runs, queries, pages, queryPages] = await Promise.all([
-    pool.query(
-      `SELECT id,status,disconnected_at,last_error_code FROM gsc_connections WHERE site_id=$1 LIMIT 1`,
-      [siteId],
-    ),
-    pool.query(
-      `SELECT p.id,p.property_uri,p.property_type,p.permission_level,p.last_discovered_at,(m.property_id IS NOT NULL) selected FROM gsc_properties p JOIN gsc_connections c ON c.id=p.connection_id LEFT JOIN site_gsc_properties m ON m.property_id=p.id AND m.site_id=$1 WHERE c.site_id=$1 ORDER BY p.property_uri LIMIT 100`,
-      [siteId],
-    ),
-    pool.query(
-      `SELECT s.*,p.property_uri FROM gsc_sync_summaries s JOIN gsc_properties p ON p.id=s.property_id WHERE s.site_id=$1`,
-      [siteId],
-    ),
-    pool.query(
-      `SELECT id,mode,status,start_date,end_date,api_requests,rows_received,coverage_status,started_at,finished_at,failure_code FROM gsc_sync_runs WHERE site_id=$1 ORDER BY started_at DESC LIMIT 20`,
-      [siteId],
-    ),
-    pool.query(
-      `SELECT query,sum(clicks)::float8 clicks,sum(impressions)::float8 impressions,CASE WHEN sum(impressions)>0 THEN sum(clicks)::float8/sum(impressions) ELSE 0 END ctr,CASE WHEN sum(impressions)>0 THEN sum(position*impressions)::float8/sum(impressions) ELSE 0 END position FROM gsc_query_metrics WHERE site_id=$1 AND ($2='' OR query ILIKE '%'||$2||'%') GROUP BY query ORDER BY clicks DESC LIMIT 50`,
-      [siteId, filters.query ?? ''],
-    ),
-    pool.query(
-      `SELECT page,sum(clicks)::float8 clicks,sum(impressions)::float8 impressions,CASE WHEN sum(impressions)>0 THEN sum(clicks)::float8/sum(impressions) ELSE 0 END ctr,CASE WHEN sum(impressions)>0 THEN sum(position*impressions)::float8/sum(impressions) ELSE 0 END position FROM gsc_page_metrics WHERE site_id=$1 AND ($2='' OR page ILIKE '%'||$2||'%') GROUP BY page ORDER BY clicks DESC LIMIT 50`,
-      [siteId, filters.page ?? ''],
-    ),
-    pool.query(
-      `SELECT metric_date,query,page,clicks,impressions,ctr,position FROM gsc_query_page_metrics WHERE site_id=$1 AND ($2='' OR query ILIKE '%'||$2||'%') AND ($3='' OR page ILIKE '%'||$3||'%') ORDER BY metric_date DESC,clicks DESC LIMIT 50`,
-      [siteId, filters.query ?? '', filters.page ?? ''],
-    ),
-  ]);
+  const [connection, properties, summary, latestJob, runs, queries, pages, queryPages] =
+    await Promise.all([
+      pool.query(
+        `SELECT id,status,disconnected_at,last_error_code FROM gsc_connections WHERE site_id=$1 LIMIT 1`,
+        [siteId],
+      ),
+      pool.query(
+        `SELECT p.id,p.property_uri,p.property_type,p.permission_level,p.last_discovered_at,(m.property_id IS NOT NULL) selected FROM gsc_properties p JOIN gsc_connections c ON c.id=p.connection_id LEFT JOIN site_gsc_properties m ON m.property_id=p.id AND m.site_id=$1 WHERE c.site_id=$1 ORDER BY p.property_uri LIMIT 100`,
+        [siteId],
+      ),
+      pool.query(
+        `SELECT s.*,p.property_uri FROM gsc_sync_summaries s JOIN gsc_properties p ON p.id=s.property_id WHERE s.site_id=$1`,
+        [siteId],
+      ),
+      pool.query(
+        `SELECT status,payload->>'mode' mode,created_at,started_at,finished_at,failure_code,failure_summary FROM jobs WHERE site_id=$1 AND type='GSC_SYNC' ORDER BY created_at DESC LIMIT 1`,
+        [siteId],
+      ),
+      pool.query(
+        `SELECT id,mode,status,start_date,end_date,api_requests,rows_received,coverage_status,started_at,finished_at,failure_code FROM gsc_sync_runs WHERE site_id=$1 ORDER BY started_at DESC LIMIT 20`,
+        [siteId],
+      ),
+      pool.query(
+        `SELECT query,sum(clicks)::float8 clicks,sum(impressions)::float8 impressions,CASE WHEN sum(impressions)>0 THEN sum(clicks)::float8/sum(impressions) ELSE 0 END ctr,CASE WHEN sum(impressions)>0 THEN sum(position*impressions)::float8/sum(impressions) ELSE 0 END position FROM gsc_query_metrics WHERE site_id=$1 AND ($2='' OR query ILIKE '%'||$2||'%') GROUP BY query ORDER BY clicks DESC LIMIT 50`,
+        [siteId, filters.query ?? ''],
+      ),
+      pool.query(
+        `SELECT page,sum(clicks)::float8 clicks,sum(impressions)::float8 impressions,CASE WHEN sum(impressions)>0 THEN sum(clicks)::float8/sum(impressions) ELSE 0 END ctr,CASE WHEN sum(impressions)>0 THEN sum(position*impressions)::float8/sum(impressions) ELSE 0 END position FROM gsc_page_metrics WHERE site_id=$1 AND ($2='' OR page ILIKE '%'||$2||'%') GROUP BY page ORDER BY clicks DESC LIMIT 50`,
+        [siteId, filters.page ?? ''],
+      ),
+      pool.query(
+        `SELECT metric_date,query,page,clicks,impressions,ctr,position FROM gsc_query_page_metrics WHERE site_id=$1 AND ($2='' OR query ILIKE '%'||$2||'%') AND ($3='' OR page ILIKE '%'||$3||'%') ORDER BY metric_date DESC,clicks DESC LIMIT 50`,
+        [siteId, filters.query ?? '', filters.page ?? ''],
+      ),
+    ]);
   return {
     connection: connection.rows[0] ?? null,
     properties: properties.rows,
     summary: summary.rows[0] ?? null,
+    latestJob: latestJob.rows[0] ?? null,
     runs: runs.rows,
     queries: queries.rows,
     pages: pages.rows,

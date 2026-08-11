@@ -1,5 +1,95 @@
 import { z } from 'zod';
 
+const calendarDatePattern = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+function calendarParts(value: string) {
+  const match = calendarDatePattern.exec(value);
+  if (!match) throw new Error(`Invalid calendar date: ${value}`);
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const instant = new Date(Date.UTC(year, month - 1, day));
+  if (
+    instant.getUTCFullYear() !== year ||
+    instant.getUTCMonth() !== month - 1 ||
+    instant.getUTCDate() !== day
+  )
+    throw new Error(`Invalid calendar date: ${value}`);
+  return { year, month, day };
+}
+
+function padded(value: number) {
+  return String(value).padStart(2, '0');
+}
+
+export function calendarDate(value: unknown): string {
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) throw new Error('Invalid calendar date');
+    return `${value.getFullYear()}-${padded(value.getMonth() + 1)}-${padded(value.getDate())}`;
+  }
+  if (typeof value !== 'string') throw new Error('Calendar date must be a Date or YYYY-MM-DD');
+  const parts = calendarParts(value);
+  return `${parts.year}-${padded(parts.month)}-${padded(parts.day)}`;
+}
+
+export function addCalendarDays(value: string, days: number): string {
+  const { year, month, day } = calendarParts(value);
+  const instant = new Date(Date.UTC(year, month - 1, day + days));
+  return `${instant.getUTCFullYear()}-${padded(instant.getUTCMonth() + 1)}-${padded(instant.getUTCDate())}`;
+}
+
+export function utcCalendarDate(value: Date): string {
+  if (Number.isNaN(value.getTime())) throw new Error('Invalid timestamp');
+  return `${value.getUTCFullYear()}-${padded(value.getUTCMonth() + 1)}-${padded(value.getUTCDate())}`;
+}
+
+export function calendarDateRange(start: string, end: string): string[] {
+  calendarParts(start);
+  calendarParts(end);
+  const result: string[] = [];
+  for (let cursor = start; cursor <= end; cursor = addCalendarDays(cursor, 1)) result.push(cursor);
+  return result;
+}
+
+export function displayCalendarDate(value: unknown, fallback = '—'): string {
+  if (value === null || value === undefined || value === '') return fallback;
+  return calendarDate(value);
+}
+
+export function displayUtcTimestamp(value: unknown, fallback = '—'): string {
+  if (value === null || value === undefined || value === '') return fallback;
+  const timestamp = value instanceof Date ? value : new Date(String(value));
+  if (Number.isNaN(timestamp.getTime())) throw new Error('Invalid timestamp');
+  const date = utcCalendarDate(timestamp);
+  return `${date} ${padded(timestamp.getUTCHours())}:${padded(timestamp.getUTCMinutes())}:${padded(timestamp.getUTCSeconds())} UTC`;
+}
+
+export function gscIncrementalDatePlan(now: Date, previousLatest?: unknown) {
+  const endDate = addCalendarDays(utcCalendarDate(now), -3);
+  const correctionDates = calendarDateRange(addCalendarDays(endDate, -2), endDate);
+  if (previousLatest === null || previousLatest === undefined) {
+    const requestedDates = calendarDateRange(addCalendarDays(endDate, -27), endDate);
+    return {
+      startDate: requestedDates[0]!,
+      endDate,
+      missingDates: requestedDates.slice(0, -3),
+      correctionDates,
+      requestedDates,
+    };
+  }
+  const latest = calendarDate(previousLatest);
+  const missingDates =
+    latest < endDate ? calendarDateRange(addCalendarDays(latest, 1), endDate) : [];
+  const requestedDates = [...new Set([...missingDates, ...correctionDates])].sort();
+  return {
+    startDate: requestedDates[0]!,
+    endDate,
+    missingDates,
+    correctionDates,
+    requestedDates,
+  };
+}
+
 export const jobStatuses = ['QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'] as const;
 export type JobStatus = (typeof jobStatuses)[number];
 export const jobTypes = ['SYSTEM_TEST', 'SITE_CRAWL', 'GSC_SYNC'] as const;

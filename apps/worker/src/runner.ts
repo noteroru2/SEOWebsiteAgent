@@ -25,7 +25,13 @@ import {
 import { resourceGuardFromEnv, type ResourceGuard } from '@seo-agent/resource-guard';
 import { crawlSite } from '@seo-agent/crawler';
 import { analyzePages, summarizeCrawl } from '@seo-agent/seo-engine';
-import type { JobType } from '@seo-agent/shared';
+import {
+  addCalendarDays,
+  calendarDateRange,
+  gscIncrementalDatePlan,
+  utcCalendarDate,
+  type JobType,
+} from '@seo-agent/shared';
 import type { Pool } from 'pg';
 import {
   decryptSecret,
@@ -167,38 +173,40 @@ export async function executeOne(
       }
       const payload = (job.payload ?? {}) as { mode?: string };
       const mode = payload.mode ?? 'INCREMENTAL';
-      const end = new Date();
-      end.setUTCDate(end.getUTCDate() - 3);
-      const dateText = (value: Date) => value.toISOString().slice(0, 10);
-      let days = mode === 'MANUAL_90D' ? 90 : 28;
+      const now = new Date();
+      const endDate = addCalendarDays(utcCalendarDate(now), -3);
+      let requestedDates = calendarDateRange(
+        addCalendarDays(endDate, -(mode === 'MANUAL_90D' ? 89 : 27)),
+        endDate,
+      );
+      let correctionDates: string[] = [];
+      let missingDates: string[] = [];
       if (mode === 'INCREMENTAL') {
         const previous = await pool.query(
           'SELECT last_finalized_date FROM gsc_sync_summaries WHERE site_id=$1',
           [siteId],
         );
-        if (previous.rows[0]?.last_finalized_date) {
-          const start = new Date(previous.rows[0].last_finalized_date);
-          start.setUTCDate(start.getUTCDate() - 2);
-          days = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / 86_400_000) + 1);
-        }
+        const plan = gscIncrementalDatePlan(now, previous.rows[0]?.last_finalized_date);
+        requestedDates = plan.requestedDates;
+        correctionDates = plan.correctionDates;
+        missingDates = plan.missingDates;
       }
-      const start = new Date(end);
-      start.setUTCDate(start.getUTCDate() - (days - 1));
+      const startDate = requestedDates[0]!;
       const run = await createGscSyncRun(
         {
           siteId,
           propertyId: connection.property.id,
           jobId: id,
           mode,
-          startDate: dateText(start),
-          endDate: dateText(end),
+          startDate,
+          endDate,
         },
         database,
       );
       await recordJobEvent(
         id,
         'GSC_SYNC_STARTED',
-        { runId: run.id, mode, startDate: dateText(start), endDate: dateText(end) },
+        { runId: run.id, mode, startDate, endDate, missingDates, correctionDates },
         database,
       );
       let apiRequests = 0,
@@ -208,12 +216,8 @@ export async function executeOne(
       let coverage = 'COMPLETE_AS_RETURNED';
       let cancelled = false;
       try {
-        for (
-          let cursor = new Date(start);
-          cursor <= end && !cancelled;
-          cursor.setUTCDate(cursor.getUTCDate() + 1)
-        ) {
-          const date = dateText(cursor);
+        for (const date of requestedDates) {
+          if (cancelled) break;
           for (const dataset of GSC_DATASETS) {
             const result = await fetchDatasetPages({
               api,

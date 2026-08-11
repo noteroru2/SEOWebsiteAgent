@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getSite, gscSiteView } from '@seo-agent/database';
+import { displayCalendarDate } from '@seo-agent/shared';
 import { disconnectGoogle, enqueueGscSync, selectGscProperty } from '../../../actions';
 
 export const dynamic = 'force-dynamic';
@@ -93,7 +94,7 @@ export default async function SearchConsolePage({
       <section className="panel section">
         <h2>Overview</h2>
         <p className="hint">
-          Last finalized date: {data.summary?.last_finalized_date ?? '—'} · Coverage:{' '}
+          Last finalized date: {displayCalendarDate(data.summary?.last_finalized_date)} · Coverage:{' '}
           {data.summary?.coverage_status ?? 'Not synced'} · Rows stored:{' '}
           {number(data.summary?.rows_stored)}
         </p>
@@ -152,7 +153,7 @@ export default async function SearchConsolePage({
           <tbody>
             {data.queryPages.map((r, i) => (
               <tr key={i}>
-                <td>{r.metric_date}</td>
+                <td>{displayCalendarDate(r.metric_date)}</td>
                 <td>{r.query}</td>
                 <td className="url-cell">{r.page}</td>
                 <td>{number(r.clicks)}</td>
@@ -181,7 +182,7 @@ export default async function SearchConsolePage({
                 <td>{r.status}</td>
                 <td>{r.mode}</td>
                 <td>
-                  {r.start_date} – {r.end_date}
+                  {displayCalendarDate(r.start_date)} – {displayCalendarDate(r.end_date)}
                 </td>
                 <td>{r.api_requests}</td>
                 <td>{r.rows_received}</td>

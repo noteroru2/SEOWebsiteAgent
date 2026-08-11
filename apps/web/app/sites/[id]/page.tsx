@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { gscSiteStatus, siteDetail } from '@seo-agent/database';
+import { displayUtcTimestamp } from '@seo-agent/shared';
 import { cancelCrawl, enqueueSiteCrawl } from '../../actions';
 
 export const dynamic = 'force-dynamic';
@@ -47,7 +48,7 @@ export default async function SitePage({
             <p className="hint">
               {gsc?.status === 'CONNECTED' ? 'Connected' : 'Not connected'} · Property:{' '}
               {gsc?.property_uri ?? 'Not selected'} · Last sync:{' '}
-              {gsc?.last_sync_at ? new Date(gsc.last_sync_at).toLocaleString() : 'Never'} · Status:{' '}
+              {gsc?.last_sync_at ? displayUtcTimestamp(gsc.last_sync_at) : 'Never'} · Status:{' '}
               {gsc?.latest_status ??
                 (gsc?.status === 'CONNECTED' ? 'Needs Attention' : 'Not configured')}
             </p>

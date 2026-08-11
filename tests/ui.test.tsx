@@ -42,12 +42,31 @@ vi.mock('@seo-agent/database', () => ({
       deltas: {},
       coverage_status: 'COMPLETE_AS_RETURNED',
       rows_stored: 20,
-      last_finalized_date: '2026-08-08',
+      last_finalized_date: new Date(2026, 7, 8),
     },
-    runs: [],
+    runs: [
+      {
+        id: 'run',
+        status: 'SUCCEEDED',
+        mode: 'INCREMENTAL',
+        start_date: new Date(2026, 7, 6),
+        end_date: new Date(2026, 7, 8),
+        api_requests: 12,
+        rows_received: 874,
+        coverage_status: 'COMPLETE_AS_RETURNED',
+      },
+    ],
     queries: [{ query: 'seo', clicks: 10, impressions: 100, ctr: 0.1, position: 4 }],
     pages: [],
-    queryPages: [],
+    queryPages: [
+      {
+        metric_date: new Date(2026, 7, 8),
+        query: 'seo',
+        page: 'https://example.com/',
+        clicks: 1,
+        impressions: 10,
+      },
+    ],
     timingMs: 2,
   })),
   gscSiteStatus: vi.fn(async () => ({
@@ -120,6 +139,7 @@ describe('server-rendered UI foundations', () => {
     expect(html).toContain('Pages crawled');
     expect(html).toContain('TITLE_MISSING');
     expect(html).toContain('Orphan candidates');
+    expect(html).toContain('2026-08-08 00:00:00 UTC');
   });
   it('renders bounded GSC data without credential material', async () => {
     const Page = (await import('../apps/web/app/sites/[id]/search-console/page')).default;
@@ -131,6 +151,8 @@ describe('server-rendered UI foundations', () => {
     );
     expect(html).toContain('sc-domain:example.com');
     expect(html).toContain('28d clicks');
+    expect(html).toContain('Last finalized date: 2026-08-08');
+    expect(html).toContain('2026-08-06 – 2026-08-08');
     expect(html).not.toContain('refresh_token');
     expect(html).not.toContain('access_token');
   });

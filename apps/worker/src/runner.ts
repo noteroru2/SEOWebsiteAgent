@@ -20,6 +20,11 @@ import {
   finishGscSyncRun,
   refreshGscSummary,
   refreshGscCrawlMappings,
+  opportunityContext,
+  createOpportunityRun,
+  loadOpportunityInput,
+  persistOpportunityResult,
+  finishOpportunityRunFailure,
   type Database,
 } from '@seo-agent/database';
 import { resourceGuardFromEnv, type ResourceGuard } from '@seo-agent/resource-guard';
@@ -33,6 +38,7 @@ import {
   type JobType,
 } from '@seo-agent/shared';
 import type { Pool } from 'pg';
+import { generateOpportunitySet } from '@seo-agent/opportunity-engine';
 import {
   decryptSecret,
   encryptSecret,
@@ -129,6 +135,81 @@ export async function executeOne(
         const code = String((error as { code?: string }).code ?? 'CRAWL_FAILED');
         await failCrawlRun(run.id, code, safe.message, database);
         await recordJobEvent(id, 'CRAWL_FAILED', { code, summary: safe.message }, database);
+        throw error;
+      }
+    }
+    if (type === 'GENERATE_OPPORTUNITIES') {
+      const siteId = String(job.site_id ?? '');
+      const context = await opportunityContext(siteId, pool);
+      const run = await createOpportunityRun(id, context, pool);
+      const started = performance.now();
+      await recordJobEvent(
+        id,
+        'OPPORTUNITY_RUN_STARTED',
+        { runId: run.id, siteId, engineVersion: run.engine_version },
+        database,
+      );
+      try {
+        if (await jobCancellationRequested(id, database)) {
+          await finishOpportunityRunFailure(
+            run.id,
+            'CANCELLED',
+            'CANCELLED',
+            'Cancelled before generation',
+            pool,
+          );
+          await recordJobEvent(id, 'OPPORTUNITY_RUN_CANCELLED', { runId: run.id }, database);
+          return {
+            state: 'CANCELLED' as const,
+            job: await markJobCancelled(id, { runId: run.id }, pool),
+          };
+        }
+        const input = await loadOpportunityInput(context, pool);
+        await touchJobHeartbeat(id, database);
+        const generated = generateOpportunitySet(input);
+        if (await jobCancellationRequested(id, database)) {
+          await finishOpportunityRunFailure(
+            run.id,
+            'CANCELLED',
+            'CANCELLED',
+            'Cancelled before persistence',
+            pool,
+          );
+          await recordJobEvent(id, 'OPPORTUNITY_RUN_CANCELLED', { runId: run.id }, database);
+          return {
+            state: 'CANCELLED' as const,
+            job: await markJobCancelled(id, { runId: run.id }, pool),
+          };
+        }
+        const durationMs = Math.round(performance.now() - started);
+        const persisted = await persistOpportunityResult(
+          run.id,
+          siteId,
+          generated,
+          durationMs,
+          pool,
+        );
+        const result = {
+          runId: run.id,
+          engineVersion: run.engine_version,
+          durationMs,
+          candidatesGenerated: generated.candidatesGenerated,
+          opportunitiesSuppressed: generated.opportunitiesSuppressed,
+          suppressionCounts: generated.suppressionCounts,
+          ...persisted,
+        };
+        await recordJobEvent(id, 'OPPORTUNITY_RUN_COMPLETED', result, database);
+        return { state: 'SUCCEEDED' as const, job: await markJobSucceeded(id, result, pool) };
+      } catch (error) {
+        const safe = error instanceof Error ? error : new Error('Unknown opportunity error');
+        const code = String((error as { code?: string }).code ?? 'OPPORTUNITY_GENERATION_FAILED');
+        await finishOpportunityRunFailure(run.id, 'FAILED', code, safe.message, pool);
+        await recordJobEvent(
+          id,
+          'OPPORTUNITY_RUN_FAILED',
+          { runId: run.id, code, summary: safe.message.slice(0, 200) },
+          database,
+        );
         throw error;
       }
     }

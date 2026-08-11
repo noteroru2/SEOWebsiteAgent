@@ -19,6 +19,13 @@ describe('input validation', () => {
     expect(
       enqueueJobSchema.safeParse({ type: 'GSC_SYNC', siteId: crypto.randomUUID() }).success,
     ).toBe(true);
+    expect(enqueueJobSchema.safeParse({ type: 'GENERATE_OPPORTUNITIES' }).success).toBe(false);
+    expect(
+      enqueueJobSchema.safeParse({
+        type: 'GENERATE_OPPORTUNITIES',
+        siteId: crypto.randomUUID(),
+      }).success,
+    ).toBe(true);
   });
   it('enforces bounded crawl configuration', () => {
     expect(

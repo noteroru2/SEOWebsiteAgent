@@ -18,11 +18,15 @@ database-name, live-connection, and marker checks; it cannot fall back to the de
 
 The GSC path uses the same queue with `GSC_SYNC` classified as light. Database indexes prevent overlapping per-site syncs and serialize globally running GSC work. OAuth credentials cross only server routes and the worker: one-time state is hash-validated, token material is AES-256-GCM encrypted, and UI projections exclude credentials. The worker requests finalized day-scoped datasets sequentially, upserts 500-row chunks, precomputes summaries, and discards each API page.
 
+The opportunity path uses the light `GENERATE_OPPORTUNITIES` job. A worker loads bounded, grouped evidence from the latest successful crawl and GSC summary, runs pure deterministic rules, and persists at most 30 scored cards plus an auditable generation run. Stable fingerprints exclude changing metrics and timestamps. Dismissals survive regeneration; an unseen card resolves only after two consecutive successful runs. Server-rendered overview, detail, dashboard, and site queries read persisted cards with explicit limits and do not poll.
+
 Queue states remain `QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED`, and `CANCELLED`. A partial unique index guarantees one heavy running job. Long jobs heartbeat at most every 15 seconds when progress is reported. Cancellation is checked between requests and partial results are finalized cleanly.
 
 Trust boundaries use Zod, SSRF DNS/IP checks, OAuth state validation, server-only authenticated encryption, and parameterized SQL. There is no arbitrary shell route, `eval`, AI call, browser crawling, or repository mutation.
 
 ## Index choices
+
+Opportunity indexes cover site/status/score, priority, type, last-seen generation, and unique site/engine fingerprints. A partial unique job index prevents overlapping queued or running opportunity generation for one site. The loader aggregates in PostgreSQL and applies row limits before data reaches the worker.
 
 Indexes cover latest crawls by site/status, crawl-page URL uniqueness, status/indexability/content-hash grouping, and issue severity/code filtering. This supports worker analysis and bounded UI reads without adding indexes for fields unused by current queries.
 

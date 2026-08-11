@@ -92,6 +92,9 @@ export const jobs = pgTable(
     uniqueIndex('jobs_one_gsc_sync_per_site_idx')
       .on(t.siteId)
       .where(sql`${t.type} = 'GSC_SYNC' AND ${t.status} IN ('QUEUED','RUNNING')`),
+    uniqueIndex('jobs_one_opportunity_generation_per_site_idx')
+      .on(t.siteId)
+      .where(sql`${t.type} = 'GENERATE_OPPORTUNITIES' AND ${t.status} IN ('QUEUED','RUNNING')`),
   ],
 );
 export const jobEvents = pgTable(
@@ -472,6 +475,40 @@ export const gscPageCrawlMappings = pgTable(
     index('gsc_page_crawl_mapping_reason_idx').on(t.siteId, t.reason),
   ],
 );
+export const opportunityRuns = pgTable(
+  'opportunity_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    jobId: uuid('job_id')
+      .unique()
+      .references(() => jobs.id, { onDelete: 'set null' }),
+    crawlRunId: uuid('crawl_run_id').references(() => crawlRuns.id, { onDelete: 'set null' }),
+    gscSyncReference: uuid('gsc_sync_reference').references(() => gscSyncRuns.id, {
+      onDelete: 'set null',
+    }),
+    status: text('status').notNull().default('RUNNING'),
+    candidatesGenerated: integer('candidates_generated').notNull().default(0),
+    opportunitiesCreated: integer('opportunities_created').notNull().default(0),
+    opportunitiesUpdated: integer('opportunities_updated').notNull().default(0),
+    opportunitiesResolved: integer('opportunities_resolved').notNull().default(0),
+    opportunitiesSuppressed: integer('opportunities_suppressed').notNull().default(0),
+    suppressionCounts: jsonb('suppression_counts').notNull().default({}),
+    durationMs: integer('duration_ms'),
+    engineVersion: text('engine_version').notNull(),
+    failureCode: text('failure_code'),
+    failureSummary: text('failure_summary'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    index('opportunity_runs_site_created_idx').on(t.siteId, t.createdAt),
+    index('opportunity_runs_status_idx').on(t.status, t.createdAt),
+  ],
+);
 export const opportunities = pgTable(
   'opportunities',
   {
@@ -480,14 +517,42 @@ export const opportunities = pgTable(
       .notNull()
       .references(() => sites.id, { onDelete: 'cascade' }),
     kind: text('kind').notNull(),
+    entityType: text('entity_type').notNull().default('SITE'),
+    url: text('url'),
+    query: text('query'),
     title: text('title').notNull(),
     summary: text('summary').notNull(),
     priority: integer('priority').notNull().default(0),
+    priorityLabel: text('priority_label').notNull().default('LOW'),
+    confidence: text('confidence').notNull().default('LOW'),
+    score: integer('score').notNull().default(0),
     status: text('status').notNull().default('OPEN'),
     evidence: jsonb('evidence').notNull().default({}),
+    scoreComponents: jsonb('score_components').notNull().default({}),
+    fingerprint: text('fingerprint').notNull(),
+    engineVersion: text('engine_version').notNull().default('legacy'),
+    generationRunId: uuid('generation_run_id').references(() => opportunityRuns.id, {
+      onDelete: 'set null',
+    }),
+    firstDetectedAt: timestamp('first_detected_at', { withTimezone: true }).notNull().defaultNow(),
+    lastDetectedAt: timestamp('last_detected_at', { withTimezone: true }).notNull().defaultNow(),
+    missingRunCount: integer('missing_run_count').notNull().default(0),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
     ...timestamps,
   },
-  (t) => [index('opportunities_site_status_idx').on(t.siteId, t.status, t.priority)],
+  (t) => [
+    index('opportunities_site_status_idx').on(t.siteId, t.status, t.priority),
+    uniqueIndex('opportunities_fingerprint_unique_idx').on(
+      t.siteId,
+      t.engineVersion,
+      t.fingerprint,
+    ),
+    index('opportunities_site_status_score_idx').on(t.siteId, t.status, t.score),
+    index('opportunities_site_priority_idx').on(t.siteId, t.priorityLabel, t.score),
+    index('opportunities_site_kind_idx').on(t.siteId, t.kind, t.score),
+    index('opportunities_last_detected_idx').on(t.siteId, t.lastDetectedAt),
+  ],
 );
 export const approvals = pgTable(
   'approvals',

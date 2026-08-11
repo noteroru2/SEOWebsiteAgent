@@ -22,6 +22,13 @@
       "when": 1786442400000,
       "tag": "0002_gsc",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786471200000,
+      "tag": "0003_opportunity_engine",
+      "breakpoints": true
     }
   ]
 }

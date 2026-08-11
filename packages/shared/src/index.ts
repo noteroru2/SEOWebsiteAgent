@@ -92,7 +92,12 @@ export function gscIncrementalDatePlan(now: Date, previousLatest?: unknown) {
 
 export const jobStatuses = ['QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'] as const;
 export type JobStatus = (typeof jobStatuses)[number];
-export const jobTypes = ['SYSTEM_TEST', 'SITE_CRAWL', 'GSC_SYNC'] as const;
+export const jobTypes = [
+  'SYSTEM_TEST',
+  'SITE_CRAWL',
+  'GSC_SYNC',
+  'GENERATE_OPPORTUNITIES',
+] as const;
 export type JobType = (typeof jobTypes)[number];
 
 export const createSiteSchema = z.object({
@@ -119,7 +124,7 @@ export const enqueueJobSchema = z
     mode: z.enum(['BOOTSTRAP_28D', 'MANUAL_90D', 'INCREMENTAL']).optional(),
   })
   .superRefine((value, ctx) => {
-    if (['SITE_CRAWL', 'GSC_SYNC'].includes(value.type) && !value.siteId)
+    if (['SITE_CRAWL', 'GSC_SYNC', 'GENERATE_OPPORTUNITIES'].includes(value.type) && !value.siteId)
       ctx.addIssue({
         code: 'custom',
         path: ['siteId'],

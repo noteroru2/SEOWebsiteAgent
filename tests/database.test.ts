@@ -40,6 +40,7 @@ suite('database, migrations, and queue', () => {
       'crawl_pages',
       'seo_issues',
       'opportunities',
+      'opportunity_runs',
       'approvals',
       'ai_usage',
       'system_events',

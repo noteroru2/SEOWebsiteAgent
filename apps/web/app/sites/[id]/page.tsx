@@ -1,8 +1,8 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { gscSiteStatus, siteDetail } from '@seo-agent/database';
+import { gscSiteStatus, siteDetail, siteOpportunitySummary } from '@seo-agent/database';
 import { displayUtcTimestamp } from '@seo-agent/shared';
-import { cancelCrawl, enqueueSiteCrawl } from '../../actions';
+import { cancelCrawl, enqueueOpportunityGeneration, enqueueSiteCrawl } from '../../actions';
 
 export const dynamic = 'force-dynamic';
 export default async function SitePage({
@@ -14,7 +14,11 @@ export default async function SitePage({
 }) {
   const { id } = await params;
   const filters = await searchParams;
-  const [data, gsc] = await Promise.all([siteDetail(id, filters), gscSiteStatus(id)]);
+  const [data, gsc, opportunities] = await Promise.all([
+    siteDetail(id, filters),
+    gscSiteStatus(id),
+    siteOpportunitySummary(id),
+  ]);
   if (!data) notFound();
   const summary = (data.latest?.summary ?? {}) as Record<string, unknown>;
   return (
@@ -54,6 +58,59 @@ export default async function SitePage({
             </p>
           </div>
           <Link href={`/sites/${id}/search-console`}>Open Search Console</Link>
+        </div>
+      </section>
+      <section className="panel compact section">
+        <div className="heading small">
+          <div>
+            <h2>SEO Opportunities</h2>
+            <p className="hint">
+              Open: {opportunities.counts.open ?? 0} · High: {opportunities.counts.high ?? 0} ·
+              Medium: {opportunities.counts.medium ?? 0} · Low: {opportunities.counts.low ?? 0}
+              {' · '}Last run: {opportunities.latestRun?.status ?? 'Never'}
+            </p>
+          </div>
+          <div className="filters actions-inline">
+            <Link href={`/opportunities?siteId=${id}`}>View All</Link>
+            <form action={enqueueOpportunityGeneration.bind(null, id)}>
+              <button disabled={!!opportunities.activeJob}>
+                {opportunities.activeJob ? 'Generation active' : 'Generate Opportunities'}
+              </button>
+            </form>
+          </div>
+        </div>
+        {opportunities.top.length ? (
+          <table>
+            <thead>
+              <tr>
+                <th>Priority</th>
+                <th>Type</th>
+                <th>Score</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {opportunities.top.map((item) => (
+                <tr key={item.id}>
+                  <td>
+                    <span className="pill">{item.priority_label}</span>
+                  </td>
+                  <td>{item.kind}</td>
+                  <td>{item.score}</td>
+                  <td>
+                    <Link href={`/opportunities/${item.id}`}>View</Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="empty compact-empty">
+            Generate a deterministic opportunity set from the latest crawl and GSC data.
+          </div>
+        )}
+        <div className="timing">
+          Query {opportunities.timingMs.toFixed(1)} ms · top 3 persisted records
         </div>
       </section>
       <div className="grid">

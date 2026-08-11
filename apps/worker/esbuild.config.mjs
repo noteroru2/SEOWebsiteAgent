@@ -21,5 +21,6 @@ await build({
     '@seo-agent/crawler': localFile('../../packages/crawler/src/index.ts'),
     '@seo-agent/seo-engine': localFile('../../packages/seo-engine/src/index.ts'),
     '@seo-agent/gsc': localFile('../../packages/gsc/src/index.ts'),
+    '@seo-agent/opportunity-engine': localFile('../../packages/opportunity-engine/src/index.ts'),
   },
 });

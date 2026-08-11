@@ -16,7 +16,7 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run db:test:prepare && node --env-file=.env node_modules/vitest/vitest.mjs run",
     "test:e2e": "npm run db:test:prepare && node --env-file=.env node_modules/vitest/vitest.mjs run tests/e2e.test.ts",
-    "db:migrate": "tsx packages/database/src/migrate.ts",
+    "db:migrate": "node --env-file=.env --import tsx packages/database/src/migrate.ts",
     "db:test:prepare": "node --env-file=.env --import tsx packages/database/src/prepare-test-database.ts",
     "db:seed": "tsx packages/database/src/seed.ts"
   },

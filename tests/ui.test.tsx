@@ -14,6 +14,18 @@ vi.mock('@seo-agent/database', () => ({
     timingMs: 1,
   })),
   databaseHealthy: vi.fn(async () => true),
+  dashboardTopOpportunities: vi.fn(async () => ({
+    rows: [
+      {
+        id: 'opp-1',
+        kind: 'STRIKING_DISTANCE_QUERY',
+        priority_label: 'HIGH',
+        score: 82,
+        site_name: 'Fixture Site',
+      },
+    ],
+    timingMs: 1,
+  })),
   listSites: vi.fn(async () => ({
     rows: [{ id: '1', name: 'Demo Site', url: 'https://example.com', active: true }],
     timingMs: 1,
@@ -23,6 +35,67 @@ vi.mock('@seo-agent/database', () => ({
   createSite: vi.fn(),
   requestJobCancellation: vi.fn(),
   mapGscProperty: vi.fn(),
+  dismissOpportunity: vi.fn(),
+  listOpportunities: vi.fn(async () => ({
+    rows: [
+      {
+        id: '11111111-1111-4111-8111-111111111112',
+        site_id: '11111111-1111-4111-8111-111111111111',
+        site_name: 'Fixture Site',
+        kind: 'STRIKING_DISTANCE_QUERY',
+        entity_type: 'QUERY_PAGE',
+        url: 'https://example.com/page',
+        query: 'seo query',
+        title: 'Query within striking distance',
+        summary: 'Meaningful demand',
+        priority_label: 'HIGH',
+        confidence: 'HIGH',
+        score: 82,
+        status: 'OPEN',
+        evidence: { currentImpressions: 200, currentPosition: 8 },
+      },
+    ],
+    counts: { HIGH: 1, MEDIUM: 0, LOW: 0 },
+    sites: [{ id: '11111111-1111-4111-8111-111111111111', name: 'Fixture Site' }],
+    timingMs: 2,
+  })),
+  opportunityDetail: vi.fn(async () => ({
+    opportunity: {
+      id: '11111111-1111-4111-8111-111111111112',
+      site_id: '11111111-1111-4111-8111-111111111111',
+      site_name: 'Fixture Site',
+      kind: 'STRIKING_DISTANCE_QUERY',
+      url: 'https://example.com/page',
+      query: 'seo query',
+      title: 'Query within striking distance',
+      summary: 'Meaningful demand',
+      priority_label: 'HIGH',
+      confidence: 'HIGH',
+      score: 82,
+      status: 'OPEN',
+      evidence: { currentImpressions: 200, unknown: 'Causation is unknown.' },
+      score_components: {
+        demand: 30,
+        potential: 20,
+        evidenceStrength: 17,
+        mappingConfidence: 15,
+        total: 82,
+      },
+      first_detected_at: new Date(),
+      last_detected_at: new Date(),
+      engine_version: 'opportunity-engine-v1',
+    },
+    relatedIssues: [],
+    relatedGsc: { clicks: 10, impressions: 200, ctr: 0.05, position: 8 },
+    timingMs: 2,
+  })),
+  siteOpportunitySummary: vi.fn(async () => ({
+    counts: { open: 1, high: 1, medium: 0, low: 0 },
+    top: [{ id: 'opp-1', kind: 'STRIKING_DISTANCE_QUERY', priority_label: 'HIGH', score: 82 }],
+    latestRun: { status: 'SUCCEEDED' },
+    activeJob: null,
+    timingMs: 1,
+  })),
   getSite: vi.fn(async () => ({
     id: '11111111-1111-4111-8111-111111111111',
     name: 'Fixture Site',
@@ -119,6 +192,7 @@ describe('server-rendered UI foundations', () => {
     const html = renderToStaticMarkup(await Page());
     expect(html).toContain('Dashboard');
     expect(html).toContain('System health');
+    expect(html).toContain('Top Opportunities');
   });
   it('renders site list', async () => {
     const Page = (await import('../apps/web/app/sites/page')).default;
@@ -142,6 +216,25 @@ describe('server-rendered UI foundations', () => {
     expect(html).toContain('TITLE_MISSING');
     expect(html).toContain('Orphan candidates');
     expect(html).toContain('2026-08-08 00:00:00 UTC');
+    expect(html).toContain('Generate Opportunities');
+    expect(html).toContain('SEO Opportunities');
+  });
+  it('renders bounded opportunity overview and deterministic detail', async () => {
+    const Overview = (await import('../apps/web/app/opportunities/page')).default;
+    const overview = renderToStaticMarkup(await Overview({ searchParams: Promise.resolve({}) }));
+    expect(overview).toContain('SEO Opportunities');
+    expect(overview).toContain('STRIKING_DISTANCE_QUERY');
+    expect(overview).toContain('bounded to 100 records');
+
+    const Detail = (await import('../apps/web/app/opportunities/[id]/page')).default;
+    const detail = renderToStaticMarkup(
+      await Detail({
+        params: Promise.resolve({ id: '11111111-1111-4111-8111-111111111112' }),
+      }),
+    );
+    expect(detail).toContain('Structured evidence');
+    expect(detail).toContain('What the system does not know');
+    expect(detail).toContain('opportunity-engine-v1');
   });
   it('renders bounded GSC data without credential material', async () => {
     const Page = (await import('../apps/web/app/sites/[id]/search-console/page')).default;

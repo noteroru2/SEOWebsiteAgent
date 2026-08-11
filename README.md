@@ -1,6 +1,6 @@
 # SEO Website Agent V1 — Low Resource Pilot
 
-Local-first foundation for a safe SEO operator. Batch 3 adds secure, read-only Google Search Console property discovery and bounded finalized-data ingestion to the crawler and deterministic SEO foundation. It does **not** call AI, edit managed repositories, deploy, or connect to Hetzner.
+Local-first foundation for a safe SEO operator. Batch 4 adds a deterministic opportunity engine over the crawler and read-only Google Search Console datasets. It does **not** call AI, generate content, edit managed repositories, deploy, or connect to Hetzner.
 
 ## Architecture
 
@@ -11,6 +11,7 @@ Local-first foundation for a safe SEO operator. Batch 3 adds secure, read-only G
 - `packages/crawler`: URL safety, robots/sitemap discovery, controlled HTTP fetching, and HTML extraction.
 - `packages/seo-engine`: deterministic indexability, issue detection, and compact summaries.
 - `packages/gsc`: OAuth security, encrypted credentials, Google REST adapter, bounded pagination, and metric aggregation.
+- `packages/opportunity-engine`: deterministic signal rules, scoring, stable fingerprints, suppression, and caps.
 
 PostgreSQL is both the system of record and queue. Claiming uses a transaction, row locking and an advisory lock. A partial unique index enforces at most one heavy `RUNNING` job even with multiple worker processes. Jobs record attempts, timestamps, failures, heartbeats and immutable events. Stale work is returned to `QUEUED` without erasing its attempt count.
 
@@ -28,7 +29,7 @@ npm.cmd run dev:web
 npm.cmd run dev:worker
 ```
 
-Open `http://localhost:3000`. Add a public HTTP(S) site on **Sites**, select **Run crawl**, then reload its detail page after the worker finishes. Browser polling is intentionally absent. `SYSTEM_TEST` remains available on Dashboard and Jobs.
+Open `http://localhost:3000`. Add a public HTTP(S) site on **Sites**, select **Run crawl**, then reload its detail page after the worker finishes. Once crawl and GSC evidence exist, opportunity generation can be requested manually from the site page. Browser polling is intentionally absent. `SYSTEM_TEST` remains available on Dashboard and Jobs.
 
 ## Docker
 
@@ -57,10 +58,12 @@ verify a test-only marker before any destructive reset. They never fall back to 
 
 Migrations are ordered SQL files in `packages/database/migrations` and applied through Drizzle. Crawl pages store structured SEO fields—not raw HTML—and GSC tables store normalized metrics—not raw API JSON. See [crawler documentation](docs/crawler.md), [technical SEO engine](docs/technical-seo-engine.md), and [Google Search Console](docs/google-search-console.md).
 
+Opportunity generation methodology, scoring, lifecycle, noise controls, and limitations are documented in [docs/opportunity-engine.md](docs/opportunity-engine.md).
+
 ## Resource model
 
 The eventual host is a Hetzner CX23 (2 vCPU, 4 GB RAM, 40 GB disk) shared with an existing application. The SEO stack must not assume all host resources belong to it. Default container ceilings total 1.25 GB: PostgreSQL 512 MB, web 512 MB and worker 256 MB. The idle worker sleeps between queue checks; only one heavy job runs. See [docs/resource-model.md](docs/resource-model.md).
 
 ## Batch boundary
 
-Production deployment is explicitly **not part of Batch 3**. No deployment, Hetzner connection, Git push, live credentials, OpenAI calls, automatic fixes, or managed-site repository modification is implemented.
+Production deployment is explicitly **not part of Batch 4**. No deployment, Hetzner connection, Git push, OpenAI/LLM calls, automatic fixes, content generation, or managed-site repository modification is implemented. Batch 5 is not started.

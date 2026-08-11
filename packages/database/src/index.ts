@@ -7,6 +7,7 @@ import type { SeoIssue } from '@seo-agent/seo-engine';
 import * as schema from './schema';
 
 export * from './schema';
+export * from './opportunities';
 export type Database = ReturnType<typeof drizzle<typeof schema>>;
 let singleton: { pool: Pool; db: Database } | undefined;
 
@@ -35,28 +36,27 @@ export async function enqueueJob(input: unknown, database = getDatabase().db) {
   const insert = database.insert(schema.jobs).values({
     type: value.type,
     siteId: value.siteId,
-    heavy: value.type !== 'GSC_SYNC',
+    heavy: !['GSC_SYNC', 'GENERATE_OPPORTUNITIES'].includes(value.type),
     payload: value.mode ? { mode: value.mode } : {},
   });
-  const [job] =
-    value.type === 'GSC_SYNC'
-      ? await insert.onConflictDoNothing().returning()
-      : await insert.returning();
-  if (!job && value.type === 'GSC_SYNC' && value.siteId) {
+  const [job] = ['GSC_SYNC', 'GENERATE_OPPORTUNITIES'].includes(value.type)
+    ? await insert.onConflictDoNothing().returning()
+    : await insert.returning();
+  if (!job && ['GSC_SYNC', 'GENERATE_OPPORTUNITIES'].includes(value.type) && value.siteId) {
     const [active] = await database
       .select()
       .from(schema.jobs)
       .where(
         and(
           eq(schema.jobs.siteId, value.siteId),
-          eq(schema.jobs.type, 'GSC_SYNC'),
+          eq(schema.jobs.type, value.type),
           inArray(schema.jobs.status, ['QUEUED', 'RUNNING']),
         ),
       )
       .orderBy(desc(schema.jobs.createdAt))
       .limit(1);
     if (active) return active;
-    throw new Error('Active GSC sync could not be resolved');
+    throw new Error(`Active ${value.type} job could not be resolved`);
   }
   await database.insert(schema.jobEvents).values({ jobId: job!.id, event: 'ENQUEUED' });
   return job!;
@@ -509,6 +509,7 @@ export const registeredJobTypes: ReadonlySet<JobType> = new Set([
   'SYSTEM_TEST',
   'SITE_CRAWL',
   'GSC_SYNC',
+  'GENERATE_OPPORTUNITIES',
 ]);
 
 export async function createGscOAuthState(

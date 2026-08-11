@@ -1,13 +1,18 @@
-import { dashboardSummary, databaseHealthy } from '@seo-agent/database';
+import Link from 'next/link';
+import { dashboardSummary, dashboardTopOpportunities, databaseHealthy } from '@seo-agent/database';
 import { enqueueSystemTest } from './actions';
 
 export const dynamic = 'force-dynamic';
 export default async function Dashboard() {
   let data: Awaited<ReturnType<typeof dashboardSummary>> | null = null;
   let dbHealthy = false;
+  let top: Awaited<ReturnType<typeof dashboardTopOpportunities>> = { rows: [], timingMs: 0 };
   try {
-    data = await dashboardSummary();
-    dbHealthy = await databaseHealthy();
+    [data, dbHealthy, top] = await Promise.all([
+      dashboardSummary(),
+      databaseHealthy(),
+      dashboardTopOpportunities(),
+    ]);
   } catch {
     /* health state is rendered */
   }
@@ -67,6 +72,43 @@ export default async function Dashboard() {
           </div>
         </section>
       </div>
+      <section className="panel section">
+        <div className="heading small">
+          <h2>Top Opportunities</h2>
+          <Link href="/opportunities">View all</Link>
+        </div>
+        {top.rows.length ? (
+          <table>
+            <thead>
+              <tr>
+                <th>Priority</th>
+                <th>Type</th>
+                <th>Site</th>
+                <th>Score</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {top.rows.map((item) => (
+                <tr key={item.id}>
+                  <td>
+                    <span className="pill">{item.priority_label}</span>
+                  </td>
+                  <td>{item.kind}</td>
+                  <td>{item.site_name}</td>
+                  <td>{item.score}</td>
+                  <td>
+                    <Link href={`/opportunities/${item.id}`}>View</Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="empty">No generated opportunities yet</div>
+        )}
+        <div className="timing">Query {top.timingMs.toFixed(1)} ms · top 5 persisted records</div>
+      </section>
     </>
   );
 }

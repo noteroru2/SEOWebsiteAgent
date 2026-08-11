@@ -245,6 +245,9 @@ td small {
 .stats.four {
   grid-template-columns: repeat(4, 1fr);
 }
+.stats.three {
+  grid-template-columns: repeat(3, 1fr);
+}
 .facts {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -273,6 +276,52 @@ td small {
   display: flex;
   gap: 8px;
   margin-bottom: 12px;
+}
+.filters.wrap {
+  flex-wrap: wrap;
+}
+.actions-inline {
+  align-items: center;
+  margin: 0;
+}
+.opportunity-list {
+  display: grid;
+  gap: 12px;
+}
+.opportunity-card {
+  border: 1px solid #e1e7e2;
+  border-radius: 10px;
+  padding: 16px;
+}
+.opportunity-card h2 {
+  margin: 10px 0 6px;
+}
+.opportunity-card p {
+  margin: 5px 0;
+}
+.opportunity-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+}
+.priority-high {
+  background: #f3d2cb;
+  color: #742b20;
+}
+.priority-medium {
+  background: #f5e8c8;
+  color: #76551c;
+}
+.facts.one {
+  grid-template-columns: 1fr;
+}
+.facts.one dd {
+  overflow-wrap: anywhere;
+}
+.compact-empty {
+  min-height: 70px;
 }
 .url-cell {
   max-width: 280px;

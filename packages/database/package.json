@@ -6,6 +6,7 @@
   "exports": "./src/index.ts",
   "dependencies": {
     "@seo-agent/crawler": "0.1.0",
+    "@seo-agent/opportunity-engine": "0.1.0",
     "@seo-agent/seo-engine": "0.1.0"
   }
 }

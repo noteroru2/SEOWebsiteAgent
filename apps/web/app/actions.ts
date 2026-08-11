@@ -5,6 +5,7 @@ import {
   requestJobCancellation,
   mapGscProperty,
   disconnectGsc,
+  dismissOpportunity,
 } from '@seo-agent/database';
 import { createSiteSchema } from '@seo-agent/shared';
 import { assertSafeTarget } from '@seo-agent/crawler';
@@ -66,4 +67,22 @@ export async function disconnectGoogle(siteId: string) {
   await disconnectGsc(siteId);
   revalidatePath(`/sites/${siteId}`);
   revalidatePath(`/sites/${siteId}/search-console`);
+}
+
+export async function enqueueOpportunityGeneration(siteId: string) {
+  await enqueueJob({ type: 'GENERATE_OPPORTUNITIES', siteId });
+  revalidatePath('/');
+  revalidatePath('/opportunities');
+  revalidatePath(`/sites/${siteId}`);
+  revalidatePath('/jobs');
+}
+
+export async function dismissOpportunityAction(opportunityId: string, siteId: string) {
+  if (!/^[0-9a-f-]{36}$/i.test(opportunityId) || !/^[0-9a-f-]{36}$/i.test(siteId))
+    throw new Error('Invalid opportunity');
+  await dismissOpportunity(opportunityId);
+  revalidatePath('/');
+  revalidatePath('/opportunities');
+  revalidatePath(`/opportunities/${opportunityId}`);
+  revalidatePath(`/sites/${siteId}`);
 }

@@ -35,6 +35,8 @@ import {
   createSourcePlanRun,
   persistSourcePlanSuccess,
   failSourcePlanRun,
+  missingDatesForWindow,
+  deterministicEvidencePacket,
   type Database,
 } from '@seo-agent/database';
 import { resourceGuardFromEnv, type ResourceGuard } from '@seo-agent/resource-guard';
@@ -52,6 +54,7 @@ import { generateOpportunitySet } from '@seo-agent/opportunity-engine';
 import { aiConfigFromEnv, OpenAiResponsesProvider, type ReasoningProvider } from '@seo-agent/ai';
 import {
   OpenAiSourcePlanProvider,
+  SOURCE_PLAN_EVIDENCE_PROMPT_VERSION,
   SOURCE_PLAN_PROMPT_VERSION,
   buildSourceContext,
   boundSourceExcerpt,
@@ -143,7 +146,10 @@ export async function executeOne(
       return { state: 'SUCCEEDED' as const, job: await markJobSucceeded(id, result, pool) };
     }
     if (type === 'GENERATE_SOURCE_CHANGE_PLAN') {
-      const payload = (job.payload ?? {}) as { opportunityId?: string };
+      const payload = (job.payload ?? {}) as {
+        opportunityId?: string;
+        evidenceReevaluation?: boolean;
+      };
       if (!payload.opportunityId)
         throw Object.assign(new Error('Opportunity id is required'), {
           code: 'OPPORTUNITY_REQUIRED',
@@ -151,6 +157,13 @@ export async function executeOne(
       let runId: string | undefined;
       try {
         const source = await opportunitySourceInput(payload.opportunityId, pool);
+        const evidence = payload.evidenceReevaluation
+          ? await deterministicEvidencePacket(payload.opportunityId, pool)
+          : null;
+        if (evidence && evidence.completeness !== 'READY_FOR_REEVALUATION')
+          throw Object.assign(new Error('Required evidence is not ready for re-evaluation'), {
+            code: 'EVIDENCE_INCOMPLETE',
+          });
         const deterministic = source.mappings.filter(
           (item) => !['UNRESOLVED', 'AMBIGUOUS'].includes(String(item.mapping_status)),
         );
@@ -198,7 +211,7 @@ export async function executeOne(
             return { ...file, excerpts: [bounded] };
           })
           .filter((file) => file.excerpts[0]!.text.length);
-        const context: SourceContext = {
+        let context: SourceContext = {
           repository: contexts[0]!.repository,
           routeMapping:
             contexts.length === 1
@@ -217,7 +230,13 @@ export async function executeOne(
           totalCharacters: 40_000 - remaining,
           redactions: boundedFiles.filter((file) => file.redacted).length,
         };
-        const prepared = await createSourcePlanRun({ jobId: id, source, context }, pool);
+        const evidenceSourceContext = evidence?.packet.targetedSourceContext.at(-1) as
+          SourceContext | undefined;
+        if (evidenceSourceContext) context = evidenceSourceContext;
+        const prepared = await createSourcePlanRun(
+          { jobId: id, source, context, evidencePacket: evidence?.packet },
+          pool,
+        );
         runId = String(prepared.run.id);
         if (prepared.reused) {
           const result = {
@@ -235,7 +254,9 @@ export async function executeOne(
             sourcePlanRunId: runId,
             opportunityId: payload.opportunityId,
             model: 'gpt-5.6-terra',
-            promptVersion: SOURCE_PLAN_PROMPT_VERSION,
+            promptVersion: evidence
+              ? SOURCE_PLAN_EVIDENCE_PROMPT_VERSION
+              : SOURCE_PLAN_PROMPT_VERSION,
           },
           database,
         );
@@ -243,7 +264,12 @@ export async function executeOne(
           sourcePlanProviderOverride ??
           new OpenAiSourcePlanProvider(process.env.OPENAI_API_KEY ?? '');
         const analysis = await provider.generate(
-          { opportunity: source.opportunity, batch5: source.batch5, context },
+          {
+            opportunity: source.opportunity,
+            batch5: source.batch5,
+            context,
+            evidencePacket: evidence?.packet,
+          },
           AbortSignal.timeout(Number(process.env.AI_REQUEST_TIMEOUT_MS ?? 60_000)),
         );
         const persisted = await persistSourcePlanSuccess(prepared.run, analysis, pool);
@@ -581,6 +607,45 @@ export async function executeOne(
       );
       let correctionDates: string[] = [];
       let missingDates: string[] = [];
+      if (mode === 'EVIDENCE_PREVIOUS_28D') {
+        const previous = await pool.query(
+          `SELECT to_char(last_finalized_date,'YYYY-MM-DD') last_date FROM gsc_sync_summaries WHERE site_id=$1`,
+          [siteId],
+        );
+        const lastDate = previous.rows[0]?.last_date;
+        if (!lastDate)
+          throw Object.assign(new Error('Finalized GSC window required'), {
+            code: 'GSC_DATA_REQUIRED',
+          });
+        const previousStart = addCalendarDays(lastDate, -55);
+        const previousEnd = addCalendarDays(lastDate, -28);
+        const stored = await pool.query(
+          `SELECT to_char(metric_date,'YYYY-MM-DD') date FROM gsc_daily_site_metrics
+           WHERE site_id=$1 AND property_id=$2 AND metric_date BETWEEN $3 AND $4`,
+          [siteId, connection.property.id, previousStart, previousEnd],
+        );
+        requestedDates = missingDatesForWindow(
+          { start: previousStart, end: previousEnd },
+          stored.rows.map((row) => row.date),
+        );
+        missingDates = [...requestedDates];
+        if (!requestedDates.length)
+          return {
+            state: 'SUCCEEDED' as const,
+            job: await markJobSucceeded(
+              id,
+              {
+                status: 'SUCCEEDED',
+                apiRequests: 0,
+                rowsReceived: 0,
+                rowsInserted: 0,
+                rowsUpdated: 0,
+                coverage: 'COMPLETE_AS_RETURNED',
+              },
+              pool,
+            ),
+          };
+      }
       if (mode === 'INCREMENTAL') {
         const previous = await pool.query(
           'SELECT last_finalized_date FROM gsc_sync_summaries WHERE site_id=$1',

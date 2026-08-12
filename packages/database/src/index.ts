@@ -10,6 +10,7 @@ export * from './schema';
 export * from './opportunities';
 export * from './ai-recommendations';
 export * from './source-plans';
+export * from './evidence-resolution';
 export type Database = ReturnType<typeof drizzle<typeof schema>>;
 let singleton: { pool: Pool; db: Database } | undefined;
 
@@ -47,7 +48,11 @@ export async function enqueueJob(input: unknown, database = getDatabase().db) {
     siteId: value.siteId,
     heavy: !deduplicatedTypes.includes(value.type),
     payload: ['ANALYZE_OPPORTUNITY', 'GENERATE_SOURCE_CHANGE_PLAN'].includes(value.type)
-      ? { opportunityId: value.opportunityId, reanalyze: value.reanalyze === true }
+      ? {
+          opportunityId: value.opportunityId,
+          reanalyze: value.reanalyze === true,
+          evidenceReevaluation: value.evidenceReevaluation === true,
+        }
       : value.mode
         ? { mode: value.mode }
         : {},

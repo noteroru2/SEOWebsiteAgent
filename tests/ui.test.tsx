@@ -10,6 +10,20 @@ vi.mock('@seo-agent/database', () => ({
     mapping: null,
     latest: null,
   })),
+  evidencePanelForOpportunity: vi.fn(async () => ({
+    completeness: 'OWNER_INPUT_REQUIRED',
+    requests: [
+      {
+        id: '22222222-2222-4222-8222-222222222222',
+        type: 'MANUAL_SERP_OBSERVATION',
+        requirement: 'Observe the current result.',
+        reason: 'The API does not provide the displayed snippet.',
+        status: 'OPEN',
+        source: 'OWNER',
+        items: [],
+      },
+    ],
+  })),
   listSourceApprovals: vi.fn(async () => ({ rows: [], timingMs: 1 })),
   connectSourceRepository: vi.fn(),
   decideSourcePlan: vi.fn(),
@@ -287,6 +301,8 @@ describe('server-rendered UI foundations', () => {
     expect(detail).toContain('SEO recommendation');
     expect(detail).toContain('REVIEW_SEARCH_INTENT');
     expect(detail).toContain('HUMAN REVIEW REQUIRED');
+    expect(detail).toContain('EVIDENCE REQUIRED');
+    expect(detail).toContain('Add SERP Observation');
     expect(detail).not.toContain('OPENAI_API_KEY=');
   });
   it('renders bounded GSC data without credential material', async () => {

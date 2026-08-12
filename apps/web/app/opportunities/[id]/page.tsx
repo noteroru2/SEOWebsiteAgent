@@ -4,8 +4,17 @@ import {
   aiPanelForOpportunity,
   opportunityDetail,
   sourcePanelForOpportunity,
+  evidencePanelForOpportunity,
 } from '@seo-agent/database';
-import { dismissOpportunityAction, enqueueAiAnalysis, enqueueSourcePlan } from '../../actions';
+import {
+  addOwnerEvidenceAction,
+  addSerpObservationAction,
+  enqueueEvidenceReevaluationAction,
+  dismissOpportunityAction,
+  enqueueAiAnalysis,
+  enqueueSourcePlan,
+  refreshInternalEvidenceAction,
+} from '../../actions';
 
 export const dynamic = 'force-dynamic';
 export default async function OpportunityDetailPage({
@@ -14,10 +23,11 @@ export default async function OpportunityDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [data, ai, source] = await Promise.all([
+  const [data, ai, source, evidenceRequired] = await Promise.all([
     opportunityDetail(id),
     aiPanelForOpportunity(id),
     sourcePanelForOpportunity(id),
+    evidencePanelForOpportunity(id),
   ]);
   if (!data) notFound();
   const item = data.opportunity;
@@ -75,6 +85,12 @@ export default async function OpportunityDetailPage({
       </section>
       <AiRecommendationPanel ai={ai} item={item} />
       <SourceUnderstandingPanel source={source} item={item} />
+      <EvidenceRequiredPanel
+        evidence={evidenceRequired}
+        opportunityId={id}
+        query={String(item.query ?? '')}
+        siteId={String(item.site_id)}
+      />
       <div className="grid section">
         <section className="panel">
           <h2>Structured evidence</h2>
@@ -108,6 +124,87 @@ export default async function OpportunityDetailPage({
       </p>
       <div className="timing">Query {data.timingMs.toFixed(1)} ms</div>
     </>
+  );
+}
+
+function EvidenceRequiredPanel({
+  evidence,
+  opportunityId,
+  query,
+  siteId,
+}: {
+  evidence: Awaited<ReturnType<typeof evidencePanelForOpportunity>>;
+  opportunityId: string;
+  query: string;
+  siteId: string;
+}) {
+  return (
+    <section className="panel section">
+      <div className="eyebrow">Owner evidence · no automatic AI call</div>
+      <h2>EVIDENCE REQUIRED</h2>
+      <p className="hint">
+        Completeness: {evidence.completeness}. Adding evidence stores an auditable fact only.
+        Re-evaluation is a separate owner action.
+      </p>
+      <div className="actions">
+        <form action={refreshInternalEvidenceAction.bind(null, opportunityId)}>
+          <button>Refresh Internal Evidence</button>
+        </form>
+        <form action={enqueueEvidenceReevaluationAction.bind(null, opportunityId, siteId)}>
+          <button disabled={evidence.completeness !== 'READY_FOR_REEVALUATION'}>
+            Re-evaluate with Evidence
+          </button>
+        </form>
+      </div>
+      {!evidence.requests.length ? (
+        <div className="empty compact-empty">No evidence requests for this opportunity.</div>
+      ) : (
+        evidence.requests.map((request) => (
+          <article className="panel compact section" key={request.id}>
+            <strong>
+              {request.type} · {request.status}
+            </strong>
+            <p>{request.requirement}</p>
+            <p className="hint">
+              Why: {request.reason} · Source: {request.source}
+            </p>
+            {request.status === 'OPEN' && request.type === 'MANUAL_SERP_OBSERVATION' ? (
+              <form action={addSerpObservationAction.bind(null, opportunityId, request.id)}>
+                <input type="hidden" name="query" value={query} />
+                <input name="observedAt" type="datetime-local" required />
+                <input name="location" placeholder="Location" required />
+                <input name="device" placeholder="Device" required />
+                <input name="displayedTitle" placeholder="Displayed title" required />
+                <textarea name="displayedSnippet" placeholder="Displayed snippet" required />
+                <input name="rankingUrl" type="url" placeholder="Ranking URL" required />
+                <input
+                  name="approximatePosition"
+                  type="number"
+                  min="1"
+                  placeholder="Approx. position"
+                />
+                <input name="serpFeatures" placeholder="SERP features, comma-separated" />
+                <textarea name="notes" placeholder="Notes" />
+                <button>Add SERP Observation</button>
+              </form>
+            ) : null}
+            {request.status === 'OPEN' && request.type.startsWith('OWNER_') ? (
+              <form action={addOwnerEvidenceAction.bind(null, opportunityId, request.id)}>
+                <textarea name="statement" placeholder="Fact or ownership statement" required />
+                <input name="confirmation" placeholder="Confirmed value" required />
+                <input name="scope" placeholder="Opportunity-specific scope" required />
+                <textarea name="notes" placeholder="Notes" />
+                <button>
+                  {request.type === 'OWNER_QUERY_OWNERSHIP'
+                    ? 'Confirm Query Ownership'
+                    : 'Confirm Business Fact'}
+                </button>
+              </form>
+            ) : null}
+          </article>
+        ))
+      )}
+    </section>
   );
 }
 

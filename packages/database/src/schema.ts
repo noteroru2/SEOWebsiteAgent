@@ -727,6 +727,38 @@ export const sourceChangePlans = pgTable(
     index('source_change_plans_opportunity_idx').on(t.opportunityId, t.createdAt),
   ],
 );
+export const evidenceRequests = pgTable(
+  'evidence_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    opportunityId: uuid('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'cascade' }),
+    type: text('type').notNull(),
+    requirement: text('requirement').notNull(),
+    reason: text('reason').notNull(),
+    status: text('status').notNull().default('OPEN'),
+    source: text('source').notNull(),
+    required: boolean('required').notNull().default(true),
+    ...timestamps,
+  },
+  (t) => [index('evidence_request_opportunity_idx').on(t.opportunityId, t.status)],
+);
+export const evidenceItems = pgTable(
+  'evidence_items',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    requestId: uuid('request_id')
+      .notNull()
+      .references(() => evidenceRequests.id, { onDelete: 'cascade' }),
+    sourceType: text('source_type').notNull(),
+    evidence: jsonb('evidence').notNull(),
+    evidenceHash: text('evidence_hash').notNull(),
+    observedAt: timestamp('observed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('evidence_item_request_idx').on(t.requestId, t.createdAt)],
+);
 export const approvals = pgTable(
   'approvals',
   {

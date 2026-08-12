@@ -124,9 +124,12 @@ export const enqueueJobSchema = z
   .object({
     type: z.enum(jobTypes),
     siteId: z.string().uuid().optional(),
-    mode: z.enum(['BOOTSTRAP_28D', 'MANUAL_90D', 'INCREMENTAL']).optional(),
+    mode: z
+      .enum(['BOOTSTRAP_28D', 'MANUAL_90D', 'INCREMENTAL', 'EVIDENCE_PREVIOUS_28D'])
+      .optional(),
     opportunityId: z.string().uuid().optional(),
     reanalyze: z.boolean().optional(),
+    evidenceReevaluation: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {
     if (

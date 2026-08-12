@@ -11,13 +11,19 @@ import {
   createSite,
   decideSourcePlan,
   enqueueJob,
+  ensureEvidenceRequest,
   listSourceApprovals,
+  opportunitySourceInput,
   persistSourceRefresh,
+  resolveEvidenceRequest,
   sourcePanelForOpportunity,
 } from '@seo-agent/database';
 import {
   deriveAstroProjectMappings,
+  buildSourceContext,
   inspectRepository,
+  SOURCE_PLAN_EVIDENCE_PROMPT_VERSION,
+  type SourcePlanProviderInput,
   type SourcePlanProvider,
 } from '@seo-agent/source-understanding';
 import { ResourceGuard } from '@seo-agent/resource-guard';
@@ -44,8 +50,10 @@ let opportunityId = '';
 
 class FakeSourceProvider implements SourcePlanProvider {
   calls = 0;
+  lastInput: SourcePlanProviderInput | null = null;
   async generate(input: Parameters<SourcePlanProvider['generate']>[0]) {
     this.calls++;
+    this.lastInput = input;
     const file = input.context.files[0]!;
     return {
       result: {
@@ -150,6 +158,55 @@ async function run(provider: FakeSourceProvider) {
   return executeOne('source-test-worker', database.pool, guard, undefined, undefined, provider);
 }
 
+async function addCompleteSourceEvidence() {
+  const source = await opportunitySourceInput(opportunityId, database.pool);
+  const row = source.mappings[0]!;
+  const context = await buildSourceContext(await inspectRepository(repository, [parent]), {
+    routePath: row.route_path,
+    status: row.mapping_status,
+    primarySourcePath: row.primary_source_path,
+    relatedSourcePaths: row.related_source_paths ?? [],
+    evidence: row.mapping_evidence ?? {},
+  });
+  const request = await ensureEvidenceRequest(
+    {
+      opportunityId,
+      type: 'TARGETED_SOURCE_CONTEXT',
+      requirement: 'Bounded source context',
+      reason: 'Required for v3',
+      source: 'SOURCE_REPOSITORY',
+    },
+    database.pool,
+  );
+  await resolveEvidenceRequest(
+    request.id,
+    'SOURCE_REPOSITORY',
+    { ...context, materialPrimaryTruncation: false },
+    undefined,
+    database.pool,
+  );
+}
+
+async function runEvidence(provider: FakeSourceProvider) {
+  await enqueueJob(
+    {
+      type: 'GENERATE_SOURCE_CHANGE_PLAN',
+      siteId,
+      opportunityId,
+      evidenceReevaluation: true,
+    },
+    database.db,
+  );
+  return executeOne(
+    'source-evidence-test-worker',
+    database.pool,
+    guard,
+    undefined,
+    undefined,
+    provider,
+  );
+}
+
 describe('source-plan worker and approval pipeline', () => {
   beforeAll(async () => {
     await migrate(database.db, { migrationsFolder: 'packages/database/migrations' });
@@ -189,6 +246,36 @@ describe('source-plan worker and approval pipeline', () => {
       (await database.pool.query('SELECT * FROM ai_usage WHERE source_plan_run_id IS NOT NULL'))
         .rows,
     ).toHaveLength(1);
+  });
+  it('runs an owner-triggered v3 re-evaluation with a fake provider only when evidence is complete', async () => {
+    await addCompleteSourceEvidence();
+    const provider = new FakeSourceProvider();
+    expect((await runEvidence(provider)).state).toBe('SUCCEEDED');
+    expect(provider.calls).toBe(1);
+    expect(provider.lastInput?.evidencePacket).toBeTruthy();
+    expect(
+      (
+        await database.pool.query(
+          `SELECT prompt_version FROM source_plan_runs ORDER BY created_at DESC LIMIT 1`,
+        )
+      ).rows[0].prompt_version,
+    ).toBe(SOURCE_PLAN_EVIDENCE_PROMPT_VERSION);
+  });
+  it('stops before the provider when required owner evidence is still open', async () => {
+    await addCompleteSourceEvidence();
+    await ensureEvidenceRequest(
+      {
+        opportunityId,
+        type: 'MANUAL_SERP_OBSERVATION',
+        requirement: 'Owner SERP observation',
+        reason: 'Required for v3',
+        source: 'OWNER',
+      },
+      database.pool,
+    );
+    const provider = new FakeSourceProvider();
+    expect((await runEvidence(provider)).state).toBe('FAILED');
+    expect(provider.calls).toBe(0);
   });
   it('reuses identical successful evidence without another provider call', async () => {
     const provider = new FakeSourceProvider();

@@ -2,6 +2,7 @@ import type { Pool } from 'pg';
 import { calculateCostMicros } from '@seo-agent/ai';
 import {
   SOURCE_PLAN_PROMPT_VERSION,
+  SOURCE_PLAN_EVIDENCE_PROMPT_VERSION,
   SOURCE_PLAN_SCHEMA_VERSION,
   sourceEvidenceHash,
   type RepositoryState,
@@ -195,6 +196,7 @@ export async function createSourcePlanRun(
     jobId: string;
     source: Awaited<ReturnType<typeof opportunitySourceInput>>;
     context: SourceContext;
+    evidencePacket?: unknown;
   },
   pool: Pool = getDatabase().pool,
 ) {
@@ -202,7 +204,11 @@ export async function createSourcePlanRun(
     opportunityFingerprint: input.source.opportunity.fingerprint,
     batch5AnalysisId: input.source.batch5.analysis_id,
     context: input.context,
+    evidencePacket: input.evidencePacket,
   });
+  const promptVersion = input.evidencePacket
+    ? SOURCE_PLAN_EVIDENCE_PROMPT_VERSION
+    : SOURCE_PLAN_PROMPT_VERSION;
   const reuse = await pool.query(
     `SELECT r.id run_id,p.* FROM source_plan_runs r JOIN source_change_plans p ON p.run_id=r.id WHERE r.source_evidence_hash=$1 AND r.status='SUCCEEDED' ORDER BY r.created_at DESC LIMIT 1`,
     [hash],
@@ -216,7 +222,7 @@ export async function createSourcePlanRun(
         input.source.repository.id,
         input.jobId,
         reuse.rows[0].run_id,
-        SOURCE_PLAN_PROMPT_VERSION,
+        promptVersion,
         SOURCE_PLAN_SCHEMA_VERSION,
         input.source.repository.head_sha,
         hash,
@@ -246,7 +252,7 @@ export async function createSourcePlanRun(
       input.source.opportunity.id,
       input.source.repository.id,
       input.jobId,
-      SOURCE_PLAN_PROMPT_VERSION,
+      promptVersion,
       SOURCE_PLAN_SCHEMA_VERSION,
       input.source.repository.head_sha,
       hash,

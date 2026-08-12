@@ -9,6 +9,9 @@ import {
   aiPanelForOpportunity,
   connectSourceRepository,
   decideSourcePlan,
+  storeOwnerEvidence,
+  deterministicEvidencePacket,
+  resolveInternalEvidenceForSix,
 } from '@seo-agent/database';
 import { inspectRepository } from '@seo-agent/source-understanding';
 import { createSiteSchema } from '@seo-agent/shared';
@@ -132,8 +135,102 @@ export async function enqueueSourcePlan(opportunityId: string, siteId: string) {
   revalidatePath('/jobs');
 }
 
+export async function refreshInternalEvidenceAction(opportunityId: string) {
+  if (!/^[0-9a-f-]{36}$/i.test(opportunityId)) throw new Error('Invalid opportunity');
+  const refreshed = await resolveInternalEvidenceForSix();
+  if (!refreshed.some((item) => item.opportunityId === opportunityId))
+    throw new Error('Opportunity is outside the current evidence-resolution scope');
+  revalidatePath(`/opportunities/${opportunityId}`);
+}
+
+export async function enqueueEvidenceReevaluationAction(opportunityId: string, siteId: string) {
+  if (!/^[0-9a-f-]{36}$/i.test(opportunityId) || !/^[0-9a-f-]{36}$/i.test(siteId))
+    throw new Error('Invalid opportunity');
+  const evidence = await deterministicEvidencePacket(opportunityId);
+  if (evidence.completeness !== 'READY_FOR_REEVALUATION')
+    throw new Error('All required evidence must be resolved before re-evaluation');
+  const panel = await aiPanelForOpportunity(opportunityId);
+  if (!panel.configured) throw new Error('OPENAI_API_KEY is not configured');
+  await enqueueJob({
+    type: 'GENERATE_SOURCE_CHANGE_PLAN',
+    siteId,
+    opportunityId,
+    evidenceReevaluation: true,
+  });
+  revalidatePath(`/opportunities/${opportunityId}`);
+  revalidatePath('/jobs');
+}
+
 export async function decideSourcePlanAction(planId: string, decision: 'APPROVED' | 'REJECTED') {
   if (!/^[0-9a-f-]{36}$/i.test(planId)) throw new Error('Invalid source plan');
   await decideSourcePlan(planId, decision);
   revalidatePath('/approvals');
+}
+
+export async function addSerpObservationAction(
+  opportunityId: string,
+  requestId: string,
+  formData: FormData,
+) {
+  const required = (name: string) => {
+    const value = String(formData.get(name) ?? '').trim();
+    if (!value) throw new Error(`${name} is required`);
+    return value;
+  };
+  const observedAt = new Date(String(formData.get('observedAt') ?? ''));
+  if (Number.isNaN(observedAt.getTime())) throw new Error('Valid observation date required');
+  const rankingUrl = new URL(required('rankingUrl'));
+  if (!['http:', 'https:'].includes(rankingUrl.protocol))
+    throw new Error('Ranking URL must use HTTP or HTTPS');
+  const approximatePosition = formData.get('approximatePosition')
+    ? Number(formData.get('approximatePosition'))
+    : null;
+  if (
+    approximatePosition !== null &&
+    (!Number.isFinite(approximatePosition) || approximatePosition < 1)
+  )
+    throw new Error('Approximate position must be a positive number');
+  await storeOwnerEvidence({
+    requestId,
+    sourceType: 'OWNER_OBSERVED_SERP',
+    observedAt,
+    evidence: {
+      query: required('query'),
+      location: required('location'),
+      device: required('device'),
+      displayedTitle: required('displayedTitle'),
+      displayedSnippet: required('displayedSnippet'),
+      rankingUrl: rankingUrl.toString(),
+      approximatePosition,
+      serpFeatures: String(formData.get('serpFeatures') ?? '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean),
+      notes: String(formData.get('notes') ?? '').trim() || null,
+    },
+  });
+  revalidatePath(`/opportunities/${opportunityId}`);
+}
+
+export async function addOwnerEvidenceAction(
+  opportunityId: string,
+  requestId: string,
+  formData: FormData,
+) {
+  const required = (name: string) => {
+    const value = String(formData.get(name) ?? '').trim();
+    if (!value) throw new Error(`${name} is required`);
+    return value;
+  };
+  await storeOwnerEvidence({
+    requestId,
+    sourceType: 'OWNER_CONFIRMED',
+    evidence: {
+      statement: required('statement'),
+      confirmation: required('confirmation'),
+      scope: required('scope'),
+      notes: String(formData.get('notes') ?? '').trim() || null,
+    },
+  });
+  revalidatePath(`/opportunities/${opportunityId}`);
 }

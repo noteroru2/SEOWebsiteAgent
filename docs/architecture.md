@@ -4,6 +4,8 @@ The pilot is a small npm-workspaces monorepo with three runtime processes: Next.
 
 Batch 6 adds two manual worker jobs: `REFRESH_SOURCE_REPOSITORY` validates a local Git repository and persists deterministic route metadata; `GENERATE_SOURCE_CHANGE_PLAN` builds one bounded source context and persists one validated plan. Web rendering reads PostgreSQL only and never scans repositories. See [source repository understanding](source-repository-understanding.md) and [source change plans](source-change-plans.md).
 
+Batch 6.4 adds scoped evidence requests/items, equal-window GSC comparison, exact multi-route source packets, and owner-entered evidence. Internal refresh and v3 re-evaluation are separate manual actions; incomplete evidence stops before the provider. See [evidence resolution](evidence-resolution.md).
+
 Automated database tests use a separately created and migrated `seo_agent_test` database in the
 same PostgreSQL instance. Destructive test reset is fail-closed behind explicit environment,
 database-name, live-connection, and marker checks; it cannot fall back to the development database.

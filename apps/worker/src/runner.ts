@@ -52,7 +52,9 @@ import { generateOpportunitySet } from '@seo-agent/opportunity-engine';
 import { aiConfigFromEnv, OpenAiResponsesProvider, type ReasoningProvider } from '@seo-agent/ai';
 import {
   OpenAiSourcePlanProvider,
+  SOURCE_PLAN_PROMPT_VERSION,
   buildSourceContext,
+  boundSourceExcerpt,
   deriveAstroProjectMappings,
   inspectRepository,
   type RouteMapping,
@@ -191,9 +193,9 @@ export async function executeOne(
         const boundedFiles = files
           .map((file) => {
             const excerpt = file.excerpts[0]!;
-            const text = excerpt.text.slice(0, remaining);
-            remaining -= text.length;
-            return { ...file, excerpts: [{ ...excerpt, text }] };
+            const bounded = boundSourceExcerpt(excerpt, remaining);
+            remaining -= bounded.actualCharacters;
+            return { ...file, excerpts: [bounded] };
           })
           .filter((file) => file.excerpts[0]!.text.length);
         const context: SourceContext = {
@@ -233,7 +235,7 @@ export async function executeOne(
             sourcePlanRunId: runId,
             opportunityId: payload.opportunityId,
             model: 'gpt-5.6-terra',
-            promptVersion: 'source-change-plan-prompt-v1',
+            promptVersion: SOURCE_PLAN_PROMPT_VERSION,
           },
           database,
         );

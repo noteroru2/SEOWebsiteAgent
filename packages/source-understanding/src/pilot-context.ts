@@ -1,6 +1,7 @@
 import { getDatabase, opportunitySourceInput } from '@seo-agent/database';
 import {
   buildSourceContext,
+  boundSourceExcerpt,
   inspectRepository,
   sourceEvidenceHash,
   type RouteMapping,
@@ -43,9 +44,9 @@ try {
     const bounded = files
       .map((file) => {
         const excerpt = file.excerpts[0]!;
-        const text = excerpt.text.slice(0, remaining);
-        remaining -= text.length;
-        return { ...file, excerpts: [{ ...excerpt, text, endLine: text.split('\n').length }] };
+        const bounded = boundSourceExcerpt(excerpt, remaining);
+        remaining -= bounded.actualCharacters;
+        return { ...file, excerpts: [bounded] };
       })
       .filter((file) => file.excerpts[0]!.text.length);
     const context: SourceContext = {
@@ -77,8 +78,11 @@ try {
         sha256: file.sha256,
         size: file.size,
         lineCount: file.lineCount,
-        excerptRanges: file.excerpts.map((excerpt) => [excerpt.startLine, excerpt.endLine]),
-        excerptCharacters: file.excerpts.reduce((sum, excerpt) => sum + excerpt.text.length, 0),
+        excerptRanges: file.excerpts.map((excerpt) => [excerpt.startLine, excerpt.actualEndLine]),
+        excerptCharacters: file.excerpts.reduce(
+          (sum, excerpt) => sum + excerpt.actualCharacters,
+          0,
+        ),
         redacted: file.redacted,
       })),
       totalCharacters: context.totalCharacters,

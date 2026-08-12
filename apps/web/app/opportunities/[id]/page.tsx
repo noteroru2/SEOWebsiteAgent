@@ -126,6 +126,10 @@ function SourceUnderstandingPanel({
   const changes = Array.isArray(output.change_items)
     ? (output.change_items as Array<Record<string, unknown>>)
     : [];
+  const context = (plan?.source_context ?? {}) as Record<string, unknown>;
+  const sourceFiles = Array.isArray(context.files)
+    ? (context.files as Array<Record<string, unknown>>)
+    : [];
   return (
     <section className="panel section">
       <div className="heading small">
@@ -162,6 +166,19 @@ function SourceUnderstandingPanel({
             <Stat label="Status" value={plan.status} />
           </div>
           <p>{plan.summary}</p>
+          <h2>Supplied source ranges</h2>
+          {sourceFiles.map((file, fileIndex) => {
+            const excerpts = Array.isArray(file.excerpts)
+              ? (file.excerpts as Array<Record<string, unknown>>)
+              : [];
+            return excerpts.map((excerpt, excerptIndex) => (
+              <p className="hint" key={`${fileIndex}-${excerptIndex}`}>
+                {String(file.path)} lines {String(excerpt.startLine)}–
+                {String(excerpt.actualEndLine ?? excerpt.endLine)} ·{' '}
+                {String(excerpt.actualCharacters ?? String(excerpt.text ?? '').length)} characters
+              </p>
+            ));
+          })}
           <h2>Source findings</h2>
           {findings.map((finding, index) => (
             <p key={index}>

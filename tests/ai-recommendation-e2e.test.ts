@@ -27,6 +27,7 @@ const guard = new ResourceGuard(
 );
 let siteId = '';
 let opportunityId = '';
+let propertyId = '';
 
 async function seed() {
   const site = await createSite(
@@ -34,12 +35,32 @@ async function seed() {
     database.db,
   );
   siteId = site.id;
+  const property = await database.pool.query(
+    `INSERT INTO gsc_properties(property_uri,property_type,permission_level)
+     VALUES('sc-domain:ai.example.com','DOMAIN','siteOwner') RETURNING id`,
+  );
+  propertyId = property.rows[0].id;
+  const sync = await database.pool.query(
+    `INSERT INTO gsc_sync_runs(site_id,property_id,mode,start_date,end_date,status,coverage_status,finished_at)
+     VALUES($1,$2,'MANUAL_28D','2026-07-12','2026-08-08','SUCCEEDED','COMPLETE_AS_RETURNED',now()) RETURNING id`,
+    [siteId, property.rows[0].id],
+  );
+  await database.pool.query(
+    `INSERT INTO gsc_sync_summaries(site_id,property_id,last_sync_run_id,last_finalized_date,coverage_status,latest_status)
+     VALUES($1,$2,$3,'2026-08-08','COMPLETE_AS_RETURNED','SUCCEEDED')`,
+    [siteId, property.rows[0].id, sync.rows[0].id],
+  );
+  const generation = await database.pool.query(
+    `INSERT INTO opportunity_runs(site_id,gsc_sync_reference,status,engine_version,finished_at)
+     VALUES($1,$2,'SUCCEEDED','opportunity-engine-v1',now()) RETURNING id`,
+    [siteId, sync.rows[0].id],
+  );
   const opportunity = await database.pool.query(
     `INSERT INTO opportunities(site_id,kind,entity_type,url,query,title,summary,priority,priority_label,
-      confidence,score,status,evidence,score_components,fingerprint,engine_version)
+      confidence,score,status,evidence,score_components,fingerprint,engine_version,generation_run_id)
      VALUES($1,'STRIKING_DISTANCE_QUERY','QUERY','https://ai.example.com/page','ตัวอย่างคำค้น',
       'Striking-distance query','Persisted deterministic evidence',3,'HIGH','MEDIUM',81,'OPEN',
-      $2,'{}','ai-fixture-fingerprint','opportunity-engine-v1') RETURNING id`,
+      $2,'{}','ai-fixture-fingerprint','opportunity-engine-v1',$3) RETURNING id`,
     [
       siteId,
       JSON.stringify({
@@ -47,6 +68,7 @@ async function seed() {
         mappingReason: 'EXACT_URL',
         unknown: 'Intent is unknown.',
       }),
+      generation.rows[0].id,
     ],
   );
   opportunityId = opportunity.rows[0].id;
@@ -99,6 +121,38 @@ describe('AI recommendation worker pipeline', () => {
     ]);
     expect(usage.rows).toHaveLength(1);
     expect(usage.rows[0].provider_request_id).toBeUndefined();
+  });
+
+  it('loads the persisted current GSC window without inventing a previous window', async () => {
+    const recommendation = await loadRecommendationContext(opportunityId, siteId, database.pool);
+    expect(recommendation.search.currentWindow).toEqual({
+      startDate: '2026-07-12',
+      endDate: '2026-08-08',
+      days: 28,
+      dataState: 'SUCCEEDED',
+      coverage: 'COMPLETE_AS_RETURNED',
+    });
+    expect(recommendation.search.previousWindow).toEqual({
+      available: false,
+      startDate: null,
+      endDate: null,
+      days: null,
+    });
+  });
+
+  it('exposes a previous GSC window only when all persisted daily dates are available', async () => {
+    await database.pool.query(
+      `INSERT INTO gsc_daily_site_metrics(site_id,property_id,metric_date)
+       SELECT $1,$2,date::date FROM generate_series('2026-06-14'::date,'2026-07-11'::date,'1 day') date`,
+      [siteId, propertyId],
+    );
+    const recommendation = await loadRecommendationContext(opportunityId, siteId, database.pool);
+    expect(recommendation.search.previousWindow).toEqual({
+      available: true,
+      startDate: '2026-06-14',
+      endDate: '2026-07-11',
+      days: 28,
+    });
   });
 
   it('reuses identical evidence without a provider call and reanalyzes only explicitly', async () => {

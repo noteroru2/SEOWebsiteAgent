@@ -3,7 +3,7 @@ import OpenAI from 'openai';
 import { zodTextFormat } from 'openai/helpers/zod';
 import { z } from 'zod';
 
-export const AI_PROMPT_VERSION = 'seo-recommendation-prompt-v1';
+export const AI_PROMPT_VERSION = 'seo-recommendation-prompt-v2';
 export const AI_SCHEMA_VERSION = 'seo-recommendation-schema-v1';
 export const DEFAULT_AI_MODEL = 'gpt-5.6-terra';
 export const DEFAULT_AI_REASONING_EFFORT = 'medium';
@@ -96,6 +96,19 @@ export interface RecommendationContext {
     previous?: unknown;
     mappingReason?: string;
     relatedSignals: unknown[];
+    currentWindow?: {
+      startDate: string;
+      endDate: string;
+      days: number;
+      dataState: string;
+      coverage: string;
+    };
+    previousWindow?: {
+      available: boolean;
+      startDate: string | null;
+      endDate: string | null;
+      days: number | null;
+    };
   };
   contentReviewRequired: boolean;
 }
@@ -220,7 +233,9 @@ export function buildProviderInput(context: RecommendationContext) {
       ? 'Page content was not persisted. Include NEEDS_CONTENT_REVIEW when content inspection is necessary.'
       : 'Use only the structured page fields supplied.',
     `Type guidance: ${TYPE_GUIDANCE[context.opportunity.type] ?? 'Stay within the supplied deterministic evidence.'}`,
-    `Respond primarily in locale ${context.site.locale}; keep machine enums in English.`,
+    `Use locale ${context.site.locale} consistently for every human-facing field: summary, evidence facts, interpretations, action titles/descriptions/goals, do-not-do items, additional evidence, and unknowns.`,
+    'Do not copy unrelated languages or scripts from evidence into prose. English is allowed only where natural for URLs, model names, technical identifiers, common SEO terms, action enums, and product or brand names.',
+    'If a supplied currentWindow has dates, treat that metric period as known and do not claim that its date range is unknown. Treat previousWindow.available=false as no supplied comparison window; do not invent one.',
     '<EVIDENCE_DATA>',
     payload,
     '</EVIDENCE_DATA>',

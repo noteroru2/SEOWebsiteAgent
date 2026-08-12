@@ -56,7 +56,7 @@ export async function loadRecommendationContext(
     throw Object.assign(new Error('Only open or monitored opportunities can be analyzed'), {
       code: 'OPPORTUNITY_NOT_ANALYZABLE',
     });
-  const [pageResult, relatedResult] = await Promise.all([
+  const [pageResult, relatedResult, windowResult] = await Promise.all([
     opportunity.url
       ? pool.query(
           `SELECT cp.* FROM crawl_pages cp
@@ -72,6 +72,28 @@ export async function loadRecommendationContext(
         AND (($3::text IS NOT NULL AND url=$3) OR ($4::text IS NOT NULL AND query=$4))
        ORDER BY score DESC LIMIT 5`,
       [siteId, opportunityId, opportunity.url, opportunity.query],
+    ),
+    pool.query(
+      `SELECT to_char(s.last_finalized_date-27,'YYYY-MM-DD') current_start_date,
+        to_char(s.last_finalized_date,'YYYY-MM-DD') current_end_date,
+        28 current_days,r.status data_state,r.coverage_status coverage,
+        COALESCE(p.previous_days,0)>=28 previous_available,
+        CASE WHEN COALESCE(p.previous_days,0)>=28
+          THEN to_char(s.last_finalized_date-55,'YYYY-MM-DD') END previous_start_date,
+        CASE WHEN COALESCE(p.previous_days,0)>=28
+          THEN to_char(s.last_finalized_date-28,'YYYY-MM-DD') END previous_end_date,
+        CASE WHEN COALESCE(p.previous_days,0)>=28 THEN 28 END previous_days
+       FROM opportunity_runs o
+       JOIN gsc_sync_runs r ON r.id=o.gsc_sync_reference
+       JOIN gsc_sync_summaries s ON s.site_id=o.site_id
+       LEFT JOIN LATERAL (
+         SELECT count(DISTINCT metric_date)::int previous_days
+         FROM gsc_daily_site_metrics m
+         WHERE m.site_id=o.site_id AND m.property_id=r.property_id
+           AND m.metric_date BETWEEN s.last_finalized_date-55 AND s.last_finalized_date-28
+       ) p ON true
+       WHERE o.id=$1 AND s.last_finalized_date IS NOT NULL LIMIT 1`,
+      [opportunity.generation_run_id],
     ),
   ]);
   const page = pageResult.rows[0];
@@ -90,6 +112,7 @@ export async function loadRecommendationContext(
     configuredLocale: process.env.SEO_RECOMMENDATION_LOCALE,
     query: opportunity.query,
   });
+  const window = windowResult.rows[0];
   return {
     site: { name: opportunity.site_name, baseUrl: opportunity.site_url, businessFacts: [], locale },
     opportunity: {
@@ -128,6 +151,23 @@ export async function loadRecommendationContext(
       mappingReason:
         typeof evidence.mappingReason === 'string' ? evidence.mappingReason : undefined,
       relatedSignals: relatedResult.rows,
+      currentWindow: window
+        ? {
+            startDate: window.current_start_date,
+            endDate: window.current_end_date,
+            days: window.current_days,
+            dataState: window.data_state,
+            coverage: window.coverage,
+          }
+        : undefined,
+      previousWindow: window
+        ? {
+            available: window.previous_available,
+            startDate: window.previous_start_date,
+            endDate: window.previous_end_date,
+            days: window.previous_days,
+          }
+        : undefined,
     },
     contentReviewRequired: true,
   };

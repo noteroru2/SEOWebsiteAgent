@@ -130,6 +130,10 @@ export const enqueueJobSchema = z
     opportunityId: z.string().uuid().optional(),
     reanalyze: z.boolean().optional(),
     evidenceReevaluation: z.boolean().optional(),
+    evidencePacketHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
   })
   .superRefine((value, ctx) => {
     if (

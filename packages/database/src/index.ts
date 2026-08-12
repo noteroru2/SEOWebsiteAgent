@@ -52,6 +52,7 @@ export async function enqueueJob(input: unknown, database = getDatabase().db) {
           opportunityId: value.opportunityId,
           reanalyze: value.reanalyze === true,
           evidenceReevaluation: value.evidenceReevaluation === true,
+          evidencePacketHash: value.evidencePacketHash,
         }
       : value.mode
         ? { mode: value.mode }
@@ -79,11 +80,11 @@ export async function enqueueJob(input: unknown, database = getDatabase().db) {
       )
       .orderBy(desc(schema.jobs.createdAt))
       .limit(1);
-    if (active) return active;
+    if (active) return { ...active, deduplicated: true };
     throw new Error(`Active ${value.type} job could not be resolved`);
   }
   await database.insert(schema.jobEvents).values({ jobId: job!.id, event: 'ENQUEUED' });
-  return job!;
+  return { ...job!, deduplicated: false };
 }
 
 export async function getSite(siteId: string, database = getDatabase().db) {

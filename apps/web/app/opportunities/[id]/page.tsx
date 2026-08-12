@@ -4,7 +4,9 @@ import {
   aiPanelForOpportunity,
   opportunityDetail,
   sourcePanelForOpportunity,
+  deterministicEvidencePacket,
   evidencePanelForOpportunity,
+  evidenceReevaluationStateForOpportunity,
 } from '@seo-agent/database';
 import {
   addOwnerEvidenceAction,
@@ -14,7 +16,9 @@ import {
   enqueueAiAnalysis,
   enqueueSourcePlan,
   refreshInternalEvidenceAction,
+  type EvidenceReevaluationActionState,
 } from '../../actions';
+import { EvidenceReevaluationControl } from './evidence-reevaluation-control';
 
 export const dynamic = 'force-dynamic';
 export default async function OpportunityDetailPage({
@@ -23,11 +27,13 @@ export default async function OpportunityDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [data, ai, source, evidenceRequired] = await Promise.all([
+  const [data, ai, source, evidenceRequired, evidencePacket, reevaluation] = await Promise.all([
     opportunityDetail(id),
     aiPanelForOpportunity(id),
     sourcePanelForOpportunity(id),
     evidencePanelForOpportunity(id),
+    deterministicEvidencePacket(id),
+    evidenceReevaluationStateForOpportunity(id),
   ]);
   if (!data) notFound();
   const item = data.opportunity;
@@ -90,6 +96,8 @@ export default async function OpportunityDetailPage({
         opportunityId={id}
         query={String(item.query ?? '')}
         siteId={String(item.site_id)}
+        evidencePacketHash={evidencePacket.evidencePacketHash}
+        reevaluation={reevaluation}
       />
       <div className="grid section">
         <section className="panel">
@@ -132,12 +140,50 @@ function EvidenceRequiredPanel({
   opportunityId,
   query,
   siteId,
+  evidencePacketHash,
+  reevaluation,
 }: {
   evidence: Awaited<ReturnType<typeof evidencePanelForOpportunity>>;
   opportunityId: string;
   query: string;
   siteId: string;
+  evidencePacketHash: string;
+  reevaluation: Awaited<ReturnType<typeof evidenceReevaluationStateForOpportunity>>;
 }) {
+  const latestJob = reevaluation.latestJob as Record<string, unknown> | null;
+  const latestPayload = (latestJob?.payload ?? {}) as Record<string, unknown>;
+  const completedEvidencePacketHash =
+    latestJob?.status === 'SUCCEEDED' && typeof latestPayload.evidencePacketHash === 'string'
+      ? latestPayload.evidencePacketHash
+      : null;
+  const initialState: EvidenceReevaluationActionState = reevaluation.activeJob
+    ? {
+        status: String(reevaluation.activeJob.status) as 'QUEUED' | 'RUNNING',
+        jobId: String(reevaluation.activeJob.id),
+        message:
+          reevaluation.activeJob.status === 'RUNNING'
+            ? 'Analyzing.'
+            : 'Queued. Waiting for a worker.',
+      }
+    : latestJob?.status === 'FAILED'
+      ? {
+          status: 'FAILED',
+          jobId: String(latestJob.id),
+          message: `Failed: ${safeJobFailure(latestJob)}`,
+        }
+      : completedEvidencePacketHash === evidencePacketHash
+        ? {
+            status: 'SUCCEEDED',
+            jobId: String(latestJob?.id ?? ''),
+            message: 'Complete for the current evidence packet.',
+          }
+        : {
+            status: 'IDLE',
+            message:
+              evidence.completeness === 'READY_FOR_REEVALUATION'
+                ? 'Ready for re-evaluation.'
+                : 'Resolve all required evidence before re-evaluation.',
+          };
   return (
     <section className="panel section">
       <div className="eyebrow">Owner evidence · no automatic AI call</div>
@@ -150,11 +196,19 @@ function EvidenceRequiredPanel({
         <form action={refreshInternalEvidenceAction.bind(null, opportunityId)}>
           <button>Refresh Internal Evidence</button>
         </form>
-        <form action={enqueueEvidenceReevaluationAction.bind(null, opportunityId, siteId)}>
-          <button disabled={evidence.completeness !== 'READY_FOR_REEVALUATION'}>
-            Re-evaluate with Evidence
-          </button>
-        </form>
+        <EvidenceReevaluationControl
+          key={`${latestJob?.id ?? 'none'}-${latestJob?.status ?? 'idle'}-${reevaluation.latestV3?.run_id ?? 'none'}`}
+          action={enqueueEvidenceReevaluationAction.bind(null, opportunityId, siteId)}
+          initialState={initialState}
+          completeness={evidence.completeness}
+          workerHealthy={reevaluation.workerHealthy}
+          lastHeartbeat={
+            reevaluation.lastHeartbeat ? new Date(reevaluation.lastHeartbeat).toISOString() : null
+          }
+          latestV3={reevaluation.latestV3}
+          currentEvidencePacketHash={evidencePacketHash}
+          completedEvidencePacketHash={completedEvidencePacketHash}
+        />
       </div>
       {!evidence.requests.length ? (
         <div className="empty compact-empty">No evidence requests for this opportunity.</div>
@@ -206,6 +260,17 @@ function EvidenceRequiredPanel({
       )}
     </section>
   );
+}
+
+function safeJobFailure(job: Record<string, unknown>) {
+  const code = String(job.failure_code ?? '');
+  if (code === 'AI_BUDGET_EXCEEDED') return 'AI budget exceeded.';
+  if (code === 'EVIDENCE_INCOMPLETE') return 'Required evidence is incomplete.';
+  if (code === 'AI_PROVIDER_ERROR') return 'The provider request failed.';
+  if (code === 'AI_AUTH_ERROR') return 'The AI provider is not configured correctly.';
+  if (code === 'AI_RATE_LIMITED') return 'The AI provider is temporarily rate limited.';
+  if (code === 'WORKER_LOST') return 'The worker stopped before completing the job.';
+  return 'Re-evaluation did not complete. Review worker health and try again deliberately.';
 }
 
 function SourceUnderstandingPanel({

@@ -11,6 +11,7 @@ import {
   decideSourcePlan,
   storeOwnerEvidence,
   deterministicEvidencePacket,
+  evidenceReevaluationStateForOpportunity,
   resolveInternalEvidenceForSix,
 } from '@seo-agent/database';
 import { inspectRepository } from '@seo-agent/source-understanding';
@@ -143,22 +144,77 @@ export async function refreshInternalEvidenceAction(opportunityId: string) {
   revalidatePath(`/opportunities/${opportunityId}`);
 }
 
-export async function enqueueEvidenceReevaluationAction(opportunityId: string, siteId: string) {
-  if (!/^[0-9a-f-]{36}$/i.test(opportunityId) || !/^[0-9a-f-]{36}$/i.test(siteId))
-    throw new Error('Invalid opportunity');
-  const evidence = await deterministicEvidencePacket(opportunityId);
-  if (evidence.completeness !== 'READY_FOR_REEVALUATION')
-    throw new Error('All required evidence must be resolved before re-evaluation');
-  const panel = await aiPanelForOpportunity(opportunityId);
-  if (!panel.configured) throw new Error('OPENAI_API_KEY is not configured');
-  await enqueueJob({
-    type: 'GENERATE_SOURCE_CHANGE_PLAN',
-    siteId,
-    opportunityId,
-    evidenceReevaluation: true,
-  });
-  revalidatePath(`/opportunities/${opportunityId}`);
-  revalidatePath('/jobs');
+export type EvidenceReevaluationActionState = {
+  status: 'IDLE' | 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+  message: string;
+  jobId?: string;
+};
+
+function boundedReevaluationError(error: unknown) {
+  const code = String((error as { code?: string }).code ?? '');
+  if (code === 'AI_BUDGET_EXCEEDED') return 'AI budget exceeded.';
+  if (code === 'EVIDENCE_INCOMPLETE') return 'Required evidence is incomplete.';
+  if (code === 'AI_PROVIDER_ERROR') return 'The provider request failed.';
+  if (code === 'AI_AUTH_ERROR') return 'The AI provider is not configured correctly.';
+  if (code === 'AI_RATE_LIMITED') return 'The AI provider is temporarily rate limited.';
+  if (error instanceof Error && error.message.includes('required evidence'))
+    return 'Required evidence is incomplete.';
+  return 'Re-evaluation could not be queued. Review evidence and worker status.';
+}
+
+export async function enqueueEvidenceReevaluationAction(
+  opportunityId: string,
+  siteId: string,
+  _previousState: EvidenceReevaluationActionState,
+  _formData: FormData,
+): Promise<EvidenceReevaluationActionState> {
+  try {
+    if (!/^[0-9a-f-]{36}$/i.test(opportunityId) || !/^[0-9a-f-]{36}$/i.test(siteId))
+      throw new Error('Invalid opportunity');
+    const existing = await evidenceReevaluationStateForOpportunity(opportunityId);
+    if (existing.activeJob) {
+      const status = String(existing.activeJob.status) as 'QUEUED' | 'RUNNING';
+      return {
+        status,
+        jobId: String(existing.activeJob.id),
+        message: status === 'RUNNING' ? 'Analysis already running.' : 'Analysis already queued.',
+      };
+    }
+    const evidence = await deterministicEvidencePacket(opportunityId);
+    if (evidence.completeness !== 'READY_FOR_REEVALUATION')
+      throw Object.assign(
+        new Error('All required evidence must be resolved before re-evaluation'),
+        {
+          code: 'EVIDENCE_INCOMPLETE',
+        },
+      );
+    const panel = await aiPanelForOpportunity(opportunityId);
+    if (!panel.configured)
+      throw Object.assign(new Error('OpenAI is not configured'), { code: 'AI_AUTH_ERROR' });
+    const job = await enqueueJob({
+      type: 'GENERATE_SOURCE_CHANGE_PLAN',
+      siteId,
+      opportunityId,
+      evidenceReevaluation: true,
+      evidencePacketHash: evidence.evidencePacketHash,
+    });
+    revalidatePath(`/opportunities/${opportunityId}`);
+    revalidatePath('/jobs');
+    const status = String(job.status) as 'QUEUED' | 'RUNNING';
+    return {
+      status,
+      jobId: String(job.id),
+      message: job.deduplicated
+        ? status === 'RUNNING'
+          ? 'Analysis already running.'
+          : 'Analysis already queued.'
+        : status === 'RUNNING'
+          ? 'Analyzing.'
+          : 'Queued.',
+    };
+  } catch (error) {
+    return { status: 'FAILED', message: boundedReevaluationError(error) };
+  }
 }
 
 export async function decideSourcePlanAction(planId: string, decision: 'APPROVED' | 'REJECTED') {

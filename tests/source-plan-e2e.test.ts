@@ -10,6 +10,7 @@ import {
   createDatabase,
   createSite,
   decideSourcePlan,
+  deterministicEvidencePacket,
   enqueueJob,
   ensureEvidenceRequest,
   listSourceApprovals,
@@ -187,15 +188,21 @@ async function addCompleteSourceEvidence() {
   );
 }
 
-async function runEvidence(provider: FakeSourceProvider) {
-  await enqueueJob(
-    {
-      type: 'GENERATE_SOURCE_CHANGE_PLAN',
-      siteId,
-      opportunityId,
-      evidenceReevaluation: true,
-    },
-    database.db,
+async function runEvidence(provider: FakeSourceProvider, requestCount = 1) {
+  const evidence = await deterministicEvidencePacket(opportunityId, database.pool);
+  await Promise.all(
+    Array.from({ length: requestCount }, () =>
+      enqueueJob(
+        {
+          type: 'GENERATE_SOURCE_CHANGE_PLAN',
+          siteId,
+          opportunityId,
+          evidenceReevaluation: true,
+          evidencePacketHash: evidence.evidencePacketHash,
+        },
+        database.db,
+      ),
+    ),
   );
   return executeOne(
     'source-evidence-test-worker',
@@ -250,7 +257,7 @@ describe('source-plan worker and approval pipeline', () => {
   it('runs an owner-triggered v3 re-evaluation with a fake provider only when evidence is complete', async () => {
     await addCompleteSourceEvidence();
     const provider = new FakeSourceProvider();
-    expect((await runEvidence(provider)).state).toBe('SUCCEEDED');
+    expect((await runEvidence(provider, 3)).state).toBe('SUCCEEDED');
     expect(provider.calls).toBe(1);
     expect(provider.lastInput?.evidencePacket).toBeTruthy();
     expect(
@@ -260,6 +267,20 @@ describe('source-plan worker and approval pipeline', () => {
         )
       ).rows[0].prompt_version,
     ).toBe(SOURCE_PLAN_EVIDENCE_PROMPT_VERSION);
+    expect(
+      (
+        await database.pool.query(
+          `SELECT count(*)::int n FROM jobs WHERE type='GENERATE_SOURCE_CHANGE_PLAN'`,
+        )
+      ).rows[0].n,
+    ).toBe(1);
+    expect(
+      (
+        await database.pool.query(
+          `SELECT count(*)::int n FROM ai_usage WHERE source_plan_run_id IS NOT NULL`,
+        )
+      ).rows[0].n,
+    ).toBe(1);
   });
   it('stops before the provider when required owner evidence is still open', async () => {
     await addCompleteSourceEvidence();
@@ -276,6 +297,46 @@ describe('source-plan worker and approval pipeline', () => {
     const provider = new FakeSourceProvider();
     expect((await runEvidence(provider)).state).toBe('FAILED');
     expect(provider.calls).toBe(0);
+  });
+  it('allows a new provider execution only after the evidence packet changes', async () => {
+    await addCompleteSourceEvidence();
+    const provider = new FakeSourceProvider();
+    expect((await runEvidence(provider)).state).toBe('SUCCEEDED');
+    const ownerRequest = await ensureEvidenceRequest(
+      {
+        opportunityId,
+        type: 'OWNER_BUSINESS_CONFIRMATION',
+        requirement: 'Confirm fixture business fact',
+        reason: 'Owner fact',
+        source: 'OWNER',
+      },
+      database.pool,
+    );
+    await resolveEvidenceRequest(
+      ownerRequest.id,
+      'OWNER_CONFIRMED',
+      { statement: 'Fixture fact', confirmation: 'YES', scope: opportunityId },
+      undefined,
+      database.pool,
+    );
+    expect((await runEvidence(provider)).state).toBe('SUCCEEDED');
+    expect(provider.calls).toBe(2);
+    expect(
+      (
+        await database.pool.query(
+          `SELECT count(DISTINCT source_evidence_hash)::int n FROM source_plan_runs
+           WHERE prompt_version=$1`,
+          [SOURCE_PLAN_EVIDENCE_PROMPT_VERSION],
+        )
+      ).rows[0].n,
+    ).toBe(2);
+    expect(
+      (
+        await database.pool.query(
+          `SELECT count(*)::int n FROM ai_usage WHERE source_plan_run_id IS NOT NULL`,
+        )
+      ).rows[0].n,
+    ).toBe(2);
   });
   it('reuses identical successful evidence without another provider call', async () => {
     const provider = new FakeSourceProvider();

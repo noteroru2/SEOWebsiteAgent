@@ -380,6 +380,45 @@ export async function evidencePanelForOpportunity(
   return { requests: result.rows, completeness: evidenceCompleteness(result.rows) };
 }
 
+export async function evidenceReevaluationStateForOpportunity(
+  opportunityId: string,
+  pool: Pool = getDatabase().pool,
+) {
+  const [jobsResult, v3Result, workerResult] = await Promise.all([
+    pool.query(
+      `SELECT id,status,payload,result,failure_code,failure_summary,created_at,started_at,
+        finished_at,heartbeat_at
+       FROM jobs WHERE type='GENERATE_SOURCE_CHANGE_PLAN'
+         AND payload->>'opportunityId'=$1 AND payload->>'evidenceReevaluation'='true'
+       ORDER BY created_at DESC LIMIT 1`,
+      [opportunityId],
+    ),
+    pool.query(
+      `SELECT r.id run_id,r.status run_status,r.prompt_version,r.source_evidence_hash,
+        r.failure_code,r.failure_summary,r.created_at,r.finished_at,p.id plan_id,p.verdict,p.confidence
+       FROM source_plan_runs r LEFT JOIN source_change_plans p ON p.run_id=r.id
+       WHERE r.opportunity_id=$1 AND r.prompt_version='source-change-plan-prompt-v3'
+       ORDER BY r.created_at DESC LIMIT 1`,
+      [opportunityId],
+    ),
+    pool.query(
+      `SELECT created_at FROM system_events WHERE source='worker' ORDER BY created_at DESC LIMIT 1`,
+    ),
+  ]);
+  const latestJob = jobsResult.rows[0] ?? null;
+  const lastHeartbeat = workerResult.rows[0]?.created_at ?? null;
+  return {
+    latestJob,
+    activeJob:
+      latestJob && ['QUEUED', 'RUNNING'].includes(String(latestJob.status)) ? latestJob : null,
+    latestV3: v3Result.rows[0] ?? null,
+    workerHealthy: Boolean(
+      lastHeartbeat && Date.now() - new Date(lastHeartbeat).getTime() < 60_000,
+    ),
+    lastHeartbeat,
+  };
+}
+
 export async function deterministicEvidencePacket(
   opportunityId: string,
   pool: Pool = getDatabase().pool,

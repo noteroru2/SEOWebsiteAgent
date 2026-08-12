@@ -1,6 +1,12 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { gscSiteView, mapGscProperty } from '@seo-agent/database';
+import {
+  deterministicEvidencePacket,
+  evidencePanelForOpportunity,
+  evidenceReevaluationStateForOpportunity,
+  gscSiteView,
+  mapGscProperty,
+} from '@seo-agent/database';
 
 vi.mock('@seo-agent/database', () => ({
   siteSourceSummary: vi.fn(async () => null),
@@ -23,6 +29,18 @@ vi.mock('@seo-agent/database', () => ({
         items: [],
       },
     ],
+  })),
+  deterministicEvidencePacket: vi.fn(async () => ({
+    packet: {},
+    evidencePacketHash: 'a'.repeat(64),
+    completeness: 'OWNER_INPUT_REQUIRED',
+  })),
+  evidenceReevaluationStateForOpportunity: vi.fn(async () => ({
+    latestJob: null,
+    activeJob: null,
+    latestV3: null,
+    workerHealthy: true,
+    lastHeartbeat: new Date(),
   })),
   listSourceApprovals: vi.fn(async () => ({ rows: [], timingMs: 1 })),
   connectSourceRepository: vi.fn(),
@@ -247,7 +265,10 @@ vi.mock('@seo-agent/database', () => ({
   })),
 }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
-vi.mock('next/navigation', () => ({ notFound: vi.fn() }));
+vi.mock('next/navigation', () => ({
+  notFound: vi.fn(),
+  useRouter: () => ({ refresh: vi.fn() }),
+}));
 describe('server-rendered UI foundations', () => {
   beforeEach(() => vi.clearAllMocks());
   it('renders dashboard', async () => {
@@ -304,6 +325,97 @@ describe('server-rendered UI foundations', () => {
     expect(detail).toContain('EVIDENCE REQUIRED');
     expect(detail).toContain('Add SERP Observation');
     expect(detail).not.toContain('OPENAI_API_KEY=');
+  });
+  it('shows a disabled queued state and worker warning for an active evidence re-evaluation', async () => {
+    vi.mocked(evidencePanelForOpportunity).mockResolvedValueOnce({
+      completeness: 'READY_FOR_REEVALUATION',
+      requests: [],
+    } as never);
+    vi.mocked(deterministicEvidencePacket).mockResolvedValueOnce({
+      packet: {},
+      evidencePacketHash: 'a'.repeat(64),
+      completeness: 'READY_FOR_REEVALUATION',
+    } as never);
+    vi.mocked(evidenceReevaluationStateForOpportunity).mockResolvedValueOnce({
+      latestJob: {
+        id: '33333333-3333-4333-8333-333333333333',
+        status: 'QUEUED',
+        payload: { evidenceReevaluation: true, evidencePacketHash: 'a'.repeat(64) },
+      },
+      activeJob: { id: '33333333-3333-4333-8333-333333333333', status: 'QUEUED' },
+      latestV3: null,
+      workerHealthy: false,
+      lastHeartbeat: new Date('2026-08-12T07:49:12Z'),
+    } as never);
+    const Detail = (await import('../apps/web/app/opportunities/[id]/page')).default;
+    const html = renderToStaticMarkup(
+      await Detail({
+        params: Promise.resolve({ id: '11111111-1111-4111-8111-111111111112' }),
+      }),
+    );
+    expect(html).toContain('<button disabled="">Queued</button>');
+    expect(html).toContain('Queued. Waiting for a worker.');
+    expect(html).toContain('Worker unavailable. The job is queued and has not started.');
+  });
+  it('shows the completed v3 result for the current evidence packet', async () => {
+    vi.mocked(evidencePanelForOpportunity).mockResolvedValueOnce({
+      completeness: 'READY_FOR_REEVALUATION',
+      requests: [],
+    } as never);
+    vi.mocked(deterministicEvidencePacket).mockResolvedValueOnce({
+      packet: {},
+      evidencePacketHash: 'b'.repeat(64),
+      completeness: 'READY_FOR_REEVALUATION',
+    } as never);
+    vi.mocked(evidenceReevaluationStateForOpportunity).mockResolvedValueOnce({
+      latestJob: {
+        id: '44444444-4444-4444-8444-444444444444',
+        status: 'SUCCEEDED',
+        payload: { evidenceReevaluation: true, evidencePacketHash: 'b'.repeat(64) },
+      },
+      activeJob: null,
+      latestV3: {
+        run_id: '55555555-5555-4555-8555-555555555555',
+        run_status: 'SUCCEEDED',
+        prompt_version: 'source-change-plan-prompt-v3',
+        verdict: 'PROTECT_CURRENT_STATE',
+        confidence: 'HIGH',
+      },
+      workerHealthy: true,
+      lastHeartbeat: new Date(),
+    } as never);
+    const Detail = (await import('../apps/web/app/opportunities/[id]/page')).default;
+    const html = renderToStaticMarkup(
+      await Detail({
+        params: Promise.resolve({ id: '11111111-1111-4111-8111-111111111112' }),
+      }),
+    );
+    expect(html).toContain('<button disabled="">Complete</button>');
+    expect(html).toContain('source-change-plan-prompt-v3');
+    expect(html).toContain('Verdict PROTECT_CURRENT_STATE');
+  });
+  it('shows a bounded safe failure instead of raw worker details', async () => {
+    vi.mocked(evidenceReevaluationStateForOpportunity).mockResolvedValueOnce({
+      latestJob: {
+        id: '66666666-6666-4666-8666-666666666666',
+        status: 'FAILED',
+        failure_code: 'AI_PROVIDER_ERROR',
+        failure_summary: 'raw provider stack and secret-like detail',
+        payload: { evidenceReevaluation: true },
+      },
+      activeJob: null,
+      latestV3: null,
+      workerHealthy: true,
+      lastHeartbeat: new Date(),
+    } as never);
+    const Detail = (await import('../apps/web/app/opportunities/[id]/page')).default;
+    const html = renderToStaticMarkup(
+      await Detail({
+        params: Promise.resolve({ id: '11111111-1111-4111-8111-111111111112' }),
+      }),
+    );
+    expect(html).toContain('Failed: The provider request failed.');
+    expect(html).not.toContain('raw provider stack');
   });
   it('renders bounded GSC data without credential material', async () => {
     const Page = (await import('../apps/web/app/sites/[id]/search-console/page')).default;

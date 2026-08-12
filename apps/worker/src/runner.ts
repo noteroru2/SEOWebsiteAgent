@@ -149,6 +149,7 @@ export async function executeOne(
       const payload = (job.payload ?? {}) as {
         opportunityId?: string;
         evidenceReevaluation?: boolean;
+        evidencePacketHash?: string;
       };
       if (!payload.opportunityId)
         throw Object.assign(new Error('Opportunity id is required'), {
@@ -160,6 +161,14 @@ export async function executeOne(
         const evidence = payload.evidenceReevaluation
           ? await deterministicEvidencePacket(payload.opportunityId, pool)
           : null;
+        if (
+          evidence &&
+          payload.evidencePacketHash &&
+          payload.evidencePacketHash !== evidence.evidencePacketHash
+        )
+          throw Object.assign(new Error('Evidence changed after the job was queued'), {
+            code: 'EVIDENCE_CHANGED',
+          });
         if (evidence && evidence.completeness !== 'READY_FOR_REEVALUATION')
           throw Object.assign(new Error('Required evidence is not ready for re-evaluation'), {
             code: 'EVIDENCE_INCOMPLETE',

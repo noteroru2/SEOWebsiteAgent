@@ -9,6 +9,7 @@ import {
   equalGscWindows,
   evidenceCompleteness,
   evidenceHash,
+  enqueueJob,
   evidencePanelForOpportunity,
   missingDatesForWindow,
   patchCandidateGate,
@@ -324,5 +325,62 @@ describe('Batch 6.4 deterministic evidence resolution', () => {
     expect(patchCandidateGate(base)).toBe(true);
     expect(patchCandidateGate({ ...base, requiredEvidenceResolved: false })).toBe(false);
     expect(patchCandidateGate({ ...base, destructiveAction: true })).toBe(false);
+  });
+  it('deduplicates three immediate evidence re-evaluation requests in the database', async () => {
+    const siteId = (
+      await database.pool.query(`SELECT site_id FROM opportunities WHERE id=$1`, [opportunityId])
+    ).rows[0].site_id;
+    const input = {
+      type: 'GENERATE_SOURCE_CHANGE_PLAN' as const,
+      siteId,
+      opportunityId,
+      evidenceReevaluation: true,
+      evidencePacketHash: 'a'.repeat(64),
+    };
+    const [first, second, third] = await Promise.all([
+      enqueueJob(input, database.db),
+      enqueueJob(input, database.db),
+      enqueueJob(input, database.db),
+    ]);
+    expect(new Set([first.id, second.id, third.id]).size).toBe(1);
+    expect([first, second, third].filter((job) => !job.deduplicated)).toHaveLength(1);
+    expect(
+      (
+        await database.pool.query(
+          `SELECT count(*)::int n FROM jobs WHERE type='GENERATE_SOURCE_CHANGE_PLAN'`,
+        )
+      ).rows[0].n,
+    ).toBe(1);
+    expect((await database.pool.query(`SELECT count(*)::int n FROM job_events`)).rows[0].n).toBe(1);
+  });
+  it('permits a deliberate new request after completion when the evidence hash changes', async () => {
+    const siteId = (
+      await database.pool.query(`SELECT site_id FROM opportunities WHERE id=$1`, [opportunityId])
+    ).rows[0].site_id;
+    const first = await enqueueJob(
+      {
+        type: 'GENERATE_SOURCE_CHANGE_PLAN',
+        siteId,
+        opportunityId,
+        evidenceReevaluation: true,
+        evidencePacketHash: 'a'.repeat(64),
+      },
+      database.db,
+    );
+    await database.pool.query(`UPDATE jobs SET status='SUCCEEDED',finished_at=now() WHERE id=$1`, [
+      first.id,
+    ]);
+    const second = await enqueueJob(
+      {
+        type: 'GENERATE_SOURCE_CHANGE_PLAN',
+        siteId,
+        opportunityId,
+        evidenceReevaluation: true,
+        evidencePacketHash: 'b'.repeat(64),
+      },
+      database.db,
+    );
+    expect(second.id).not.toBe(first.id);
+    expect(second.deduplicated).toBe(false);
   });
 });

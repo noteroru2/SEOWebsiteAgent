@@ -60,6 +60,7 @@ import {
   boundSourceExcerpt,
   deriveAstroProjectMappings,
   inspectRepository,
+  resolveWorkerRepositoryPath,
   type RouteMapping,
   type SourceContext,
   type SourcePlanProvider,
@@ -121,7 +122,9 @@ export async function executeOne(
         database,
       );
       const started = performance.now();
-      const state = await inspectRepository(String(repository.local_path));
+      const state = await inspectRepository(
+        resolveWorkerRepositoryPath(String(repository.local_path)),
+      );
       if (repository.expected_remote && state.originUrl !== repository.expected_remote)
         throw Object.assign(new Error('Source repository remote does not match configuration'), {
           code: 'SOURCE_REMOTE_MISMATCH',
@@ -181,7 +184,9 @@ export async function executeOne(
             new Error('Every opportunity URL requires deterministic source mapping'),
             { code: 'SOURCE_MAPPING_REQUIRED' },
           );
-        const repositoryState = await inspectRepository(String(source.repository.local_path));
+        const repositoryState = await inspectRepository(
+          resolveWorkerRepositoryPath(String(source.repository.local_path)),
+        );
         if (!repositoryState.clean || repositoryState.headSha !== source.repository.head_sha)
           throw Object.assign(new Error('Repository state changed after source refresh'), {
             code: 'SOURCE_REPOSITORY_STALE',

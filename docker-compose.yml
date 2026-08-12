@@ -61,6 +61,9 @@ services:
       OPENAI_MODEL_EFFICIENT: ${OPENAI_MODEL_EFFICIENT:-gpt-5.6-luna}
       OPENAI_MODEL_ESCALATION: ${OPENAI_MODEL_ESCALATION:-gpt-5.6-sol}
       OPENAI_REASONING_EFFORT: ${OPENAI_REASONING_EFFORT:-medium}
+      SOURCE_REPO_ALLOWED_ROOTS: /source-repos
+      SOURCE_REPO_LOGICAL_ROOT: ${SOURCE_REPO_HOST_ROOT:?SOURCE_REPO_HOST_ROOT is required for the worker}
+      SOURCE_REPO_WORKER_ROOT: /source-repos
       AI_REQUEST_TIMEOUT_MS: ${AI_REQUEST_TIMEOUT_MS:-60000}
       AI_GLOBAL_MONTHLY_BUDGET_USD: ${AI_GLOBAL_MONTHLY_BUDGET_USD:-28.50}
       AI_SITE_MONTHLY_BUDGET_USD: ${AI_SITE_MONTHLY_BUDGET_USD:-8.50}
@@ -75,6 +78,11 @@ services:
       AI_PRICE_SOL_CACHED_INPUT_USD_PER_MILLION: ${AI_PRICE_SOL_CACHED_INPUT_USD_PER_MILLION:-0.5}
       AI_PRICE_SOL_OUTPUT_USD_PER_MILLION: ${AI_PRICE_SOL_OUTPUT_USD_PER_MILLION:-30}
       SEO_RECOMMENDATION_LOCALE: ${SEO_RECOMMENDATION_LOCALE:-}
+    volumes:
+      - type: bind
+        source: ${SOURCE_REPO_HOST_ROOT:?SOURCE_REPO_HOST_ROOT is required for the worker}
+        target: /source-repos
+        read_only: true
     depends_on:
       migrate: { condition: service_completed_successfully }
     healthcheck:

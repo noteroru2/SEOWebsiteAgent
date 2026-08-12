@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -19,6 +19,7 @@ import {
   isAllowedSourcePath,
   normalizeRelativePath,
   readTrackedSourceFile,
+  resolveWorkerRepositoryPath,
   sourceEvidenceHash,
   sourceExcerptActualEndLine,
   sourcePlanSchema,
@@ -207,6 +208,51 @@ describe('Batch 6 filesystem safety', () => {
     await expect(readTrackedSourceFile(state, '../../outside')).rejects.toMatchObject({
       code: 'SOURCE_PATH_TRAVERSAL',
     }));
+  it('maps a Windows logical repository beneath the worker allowed root', () =>
+    expect(
+      resolveWorkerRepositoryPath(
+        'C:\\Users\\User\\seo-source\\amphon.co.th',
+        'C:\\Users\\User\\seo-source',
+        parent,
+      ),
+    ).toBe(path.join(parent, 'amphon.co.th')));
+  it('rejects logical traversal outside the mounted root', () =>
+    expect(() =>
+      resolveWorkerRepositoryPath(
+        'C:\\Users\\User\\outside\\repo',
+        'C:\\Users\\User\\seo-source',
+        parent,
+      ),
+    ).toThrow());
+  it('fails closed when runtime mapping is incomplete', () =>
+    expect(() =>
+      resolveWorkerRepositoryPath('C:\\Users\\User\\seo-source\\repo', undefined, parent),
+    ).toThrow());
+  it('rejects a translated repository symlink that escapes the worker root', async () => {
+    const link = path.join(parent, 'escaped-repository');
+    await symlink(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+    const mapped = resolveWorkerRepositoryPath(
+      'C:\\source-root\\escaped-repository',
+      'C:\\source-root',
+      parent,
+    );
+    await expect(validateRepositoryRoot(mapped, [parent])).rejects.toMatchObject({
+      code: 'SOURCE_REPOSITORY_OUTSIDE_ALLOWED_ROOT',
+    });
+  });
+  it('fails closed when the translated mount path is missing', async () => {
+    const mapped = resolveWorkerRepositoryPath(
+      'C:\\source-root\\missing-repository',
+      'C:\\source-root',
+      parent,
+    );
+    await expect(validateRepositoryRoot(mapped, [parent])).rejects.toBeTruthy();
+  });
+  it('declares the worker source bind mount read-only', async () => {
+    const compose = await readFile('docker-compose.yml', 'utf8');
+    expect(compose).toContain('target: /source-repos');
+    expect(compose).toContain('read_only: true');
+  });
 });
 
 describe('Batch 6 read-only Git safety', () => {

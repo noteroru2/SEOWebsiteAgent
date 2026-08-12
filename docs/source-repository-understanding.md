@@ -6,6 +6,10 @@ Batch 6 connects a site to an explicitly supplied local Git working tree. The ap
 
 `SOURCE_REPO_ALLOWED_ROOTS` is required and contains one or more absolute parent directories separated by the platform path delimiter. Repository roots are resolved with `realpath`, must be strict descendants of an allowed root, must be local directories, and must equal Git's reported top-level directory. There is no filesystem browser or arbitrary-path endpoint.
 
+For the containerized local worker, `SOURCE_REPO_HOST_ROOT` supplies the single host bind source. Compose mounts it read-only at `/source-repos`; `SOURCE_REPO_LOGICAL_ROOT` and `SOURCE_REPO_WORKER_ROOT` map the persisted host identity to that worker-local root. Mapping is deterministic, descendant-only, and is followed by the same realpath and symlink-containment checks.
+
+Read-only Git commands set `core.autocrlf=true` explicitly so the Linux worker evaluates a Windows checkout with the same normalized index semantics instead of falsely reporting every CRLF file as modified.
+
 The Git adapter uses `execFile` with `shell: false` and exposes only fixed read operations: top-level, HEAD, current branch, porcelain status, tracked-file listing, and sanitized origin URL. Write commands and arbitrary passthrough are absent.
 
 Only `git ls-files` paths can be read. Every file is resolved again and traversal or symlink escape is rejected. Allowed text types are Astro, Markdown/MDX, TypeScript/JavaScript, JSON, YAML, and CSS. Sensitive names (`.env*`, private keys, credentials, secrets, service accounts, and tokens), binaries, excluded dependency/build directories, and files over 512 KiB are rejected. Obvious secret-like values in otherwise allowed source are redacted before context construction.

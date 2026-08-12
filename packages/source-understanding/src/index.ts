@@ -74,6 +74,60 @@ export function configuredAllowedRoots(value = process.env.SOURCE_REPO_ALLOWED_R
     .filter(Boolean);
 }
 
+function pathApiFor(value: string) {
+  return path.win32.isAbsolute(value) ? path.win32 : path.posix;
+}
+
+/**
+ * Maps a persisted host repository identity into a worker-local mount without
+ * weakening the realpath-based allowed-root validation performed afterwards.
+ */
+export function resolveWorkerRepositoryPath(
+  repositoryRoot: string,
+  logicalRoot = process.env.SOURCE_REPO_LOGICAL_ROOT,
+  workerRoot = process.env.SOURCE_REPO_WORKER_ROOT,
+) {
+  if (!logicalRoot && !workerRoot) return repositoryRoot;
+  if (!logicalRoot?.trim() || !workerRoot?.trim())
+    throw sourceError(
+      'SOURCE_REPOSITORY_MAPPING_INCOMPLETE',
+      'Source repository runtime mapping is incomplete',
+    );
+  const logicalApi = pathApiFor(logicalRoot);
+  if (!logicalApi.isAbsolute(repositoryRoot) || !logicalApi.isAbsolute(logicalRoot))
+    throw sourceError(
+      'SOURCE_REPOSITORY_MAPPING_REJECTED',
+      'Source repository logical paths must be absolute',
+    );
+  if (!path.isAbsolute(workerRoot) || workerRoot.startsWith('\\\\'))
+    throw sourceError(
+      'SOURCE_REPOSITORY_MAPPING_REJECTED',
+      'Source repository worker root must be an absolute local path',
+    );
+  const relative = logicalApi.relative(
+    logicalApi.resolve(logicalRoot),
+    logicalApi.resolve(repositoryRoot),
+  );
+  if (!relative || relative === '..' || relative.startsWith(`..${logicalApi.sep}`))
+    throw sourceError(
+      'SOURCE_REPOSITORY_MAPPING_OUTSIDE_ROOT',
+      'Source repository is outside the configured logical root',
+    );
+  const segments = relative.split(logicalApi.sep);
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..'))
+    throw sourceError(
+      'SOURCE_REPOSITORY_MAPPING_REJECTED',
+      'Source repository mapping contains an invalid segment',
+    );
+  const resolved = path.resolve(workerRoot, ...segments);
+  if (!inside(path.resolve(workerRoot), resolved, true))
+    throw sourceError(
+      'SOURCE_REPOSITORY_MAPPING_OUTSIDE_ROOT',
+      'Resolved source repository is outside the worker root',
+    );
+  return resolved;
+}
+
 function inside(parent: string, child: string, strict = false) {
   const relative = path.relative(parent, child);
   return (
@@ -122,7 +176,7 @@ export class ReadOnlyGit {
     this.#root = root;
   }
   async #run(args: readonly string[], encoding: BufferEncoding | 'buffer' = 'utf8') {
-    const fixed = ['-c', `safe.directory=${this.#root}`, ...args];
+    const fixed = ['-c', `safe.directory=${this.#root}`, '-c', 'core.autocrlf=true', ...args];
     const result = await execFileAsync('git', fixed, {
       cwd: this.#root,
       windowsHide: true,

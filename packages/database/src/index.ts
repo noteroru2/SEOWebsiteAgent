@@ -413,6 +413,61 @@ export async function recoverStaleJobs(staleMinutes: number, database = getDatab
   return recovered;
 }
 
+export async function retryFailedJob(
+  jobId: string,
+  options: {
+    expectedType: JobType;
+    expectedFailureCode?: string;
+    evidencePacketHash?: string;
+  },
+  pool = getDatabase().pool,
+) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const selected = await client.query('SELECT * FROM jobs WHERE id=$1 FOR UPDATE', [jobId]);
+    const job = selected.rows[0] as Record<string, unknown> | undefined;
+    if (!job) throw new Error('Retry job was not found');
+    if (job.type !== options.expectedType) throw new Error('Retry job type does not match');
+    if (job.status !== 'FAILED') throw new Error('Only a failed job can be retried');
+    if (Number(job.attempt_count) >= Number(job.max_attempts))
+      throw new Error('Retry job has no attempts remaining');
+    if (options.expectedFailureCode && job.failure_code !== options.expectedFailureCode)
+      throw new Error('Retry job failure identity does not match');
+    if (options.expectedType === 'GENERATE_SOURCE_CHANGE_PLAN') {
+      const active = await client.query(
+        `SELECT id FROM jobs WHERE type='GENERATE_SOURCE_CHANGE_PLAN' AND status IN ('QUEUED','RUNNING') AND id<>$1 LIMIT 1`,
+        [jobId],
+      );
+      if (active.rows[0]) throw new Error('Another source-plan job is active');
+    }
+    const payload = { ...((job.payload as Record<string, unknown> | null) ?? {}) };
+    if (options.evidencePacketHash) payload.evidencePacketHash = options.evidencePacketHash;
+    const updated = await client.query(
+      `UPDATE jobs SET status='QUEUED',payload=$2::jsonb,result=NULL,worker_id=NULL,started_at=NULL,finished_at=NULL,heartbeat_at=NULL,failure_code=NULL,failure_summary=NULL,cancellation_requested_at=NULL,available_at=NOW(),updated_at=NOW() WHERE id=$1 RETURNING *`,
+      [jobId, JSON.stringify(payload)],
+    );
+    await client.query(
+      `INSERT INTO job_events(job_id,event,detail) VALUES($1,'RETRY_QUEUED',$2::jsonb)`,
+      [
+        jobId,
+        JSON.stringify({
+          previousAttempt: job.attempt_count,
+          previousFailureCode: job.failure_code,
+          previousFailureSummary: job.failure_summary,
+        }),
+      ],
+    );
+    await client.query('COMMIT');
+    return updated.rows[0] as Record<string, unknown>;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function dashboardSummary(database = getDatabase().db) {
   const started = performance.now();
   const [[siteCount], [running], [pending], [queued], [aiCost], [worker]] = await Promise.all([

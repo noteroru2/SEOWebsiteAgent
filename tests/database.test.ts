@@ -7,6 +7,7 @@ import {
   markJobSucceeded,
   markJobFailed,
   recoverStaleJobs,
+  retryFailedJob,
   requestJobCancellation,
   touchJobHeartbeat,
 } from '@seo-agent/database';
@@ -116,6 +117,30 @@ suite('database, migrations, and queue', () => {
     expect(recovered).toHaveLength(1);
     expect(recovered[0]!.status).toBe('QUEUED');
     expect(recovered[0]!.attemptCount).toBe(1);
+  });
+  it('retries the same failed job while preserving the failed-attempt audit', async () => {
+    const job = await enqueueJob({ type: 'SYSTEM_TEST' }, database.db);
+    await claimNextJob('failed-worker', database.pool);
+    await markJobFailed(job.id, 'SAFE_FAILURE', 'Safe summary', database.pool);
+    const retried = await retryFailedJob(
+      job.id,
+      { expectedType: 'SYSTEM_TEST', expectedFailureCode: 'SAFE_FAILURE' },
+      database.pool,
+    );
+    expect(retried.id).toBe(job.id);
+    expect(retried.status).toBe('QUEUED');
+    expect(retried.attempt_count).toBe(1);
+    const events = await database.pool.query(
+      'SELECT event,detail FROM job_events WHERE job_id=$1 ORDER BY created_at,id',
+      [job.id],
+    );
+    expect(events.rows.map((row) => row.event)).toEqual([
+      'ENQUEUED',
+      'CLAIMED',
+      'FAILED',
+      'RETRY_QUEUED',
+    ]);
+    expect(events.rows.at(-1).detail.previousFailureCode).toBe('SAFE_FAILURE');
   });
   it('supports queued cancellation and heartbeat updates', async () => {
     const cancelled = await enqueueJob({ type: 'SYSTEM_TEST' }, database.db);

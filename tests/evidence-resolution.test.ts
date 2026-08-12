@@ -5,6 +5,7 @@ import {
   createSite,
   buildGscComparison,
   correctOwnerEvidenceTimestamp,
+  currentEvidenceV3,
   deterministicEvidencePacket,
   ensureEvidenceRequest,
   equalGscWindows,
@@ -129,6 +130,17 @@ describe('Batch 6.4 deterministic evidence resolution', () => {
   });
   it('handles zero denominators safely', () =>
     expect(safeMetricDelta(4, 0)).toEqual({ absolute: 4, relative: null }));
+  it('selects only a non-stale V3 matching the current evidence packet', () => {
+    const current = {
+      run_status: 'SUCCEEDED',
+      plan_status: 'READY_FOR_REVIEW',
+      evidence_packet_hash: 'a'.repeat(64),
+    };
+    expect(currentEvidenceV3(current, 'a'.repeat(64))).toBe(current);
+    expect(currentEvidenceV3({ ...current, plan_status: 'STALE' }, 'a'.repeat(64))).toBeNull();
+    expect(currentEvidenceV3(current, 'b'.repeat(64))).toBeNull();
+    expect(currentEvidenceV3(null, 'a'.repeat(64))).toBeNull();
+  });
   it('compares current and previous query-to-page distributions deterministically', async () => {
     const siteId = (
       await database.pool.query(`SELECT site_id FROM opportunities WHERE id=$1`, [opportunityId])

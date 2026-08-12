@@ -15,7 +15,8 @@ export function EvidenceReevaluationControl({
   completeness,
   workerHealthy,
   lastHeartbeat,
-  latestV3,
+  currentV3,
+  historicalV3,
   currentEvidencePacketHash,
   completedEvidencePacketHash,
 }: {
@@ -24,7 +25,8 @@ export function EvidenceReevaluationControl({
   completeness: string;
   workerHealthy: boolean;
   lastHeartbeat: string | null;
-  latestV3: Record<string, unknown> | null;
+  currentV3: Record<string, unknown> | null;
+  historicalV3: Record<string, unknown> | null;
   currentEvidencePacketHash: string;
   completedEvidencePacketHash: string | null;
 }) {
@@ -66,11 +68,19 @@ export function EvidenceReevaluationControl({
           {lastHeartbeat ? ` Last heartbeat: ${lastHeartbeat}.` : ''}
         </p>
       ) : null}
-      {latestV3 ? (
+      {currentV3 ? (
         <p className="hint">
-          V3 result: {String(latestV3.run_status)} · Prompt {String(latestV3.prompt_version)}
-          {latestV3.verdict ? ` · Verdict ${String(latestV3.verdict)}` : ''}
-          {latestV3.confidence ? ` · Confidence ${String(latestV3.confidence)}` : ''}
+          V3 result: {String(currentV3.run_status)} · Prompt {String(currentV3.prompt_version)}
+          {currentV3.verdict ? ` · Verdict ${String(currentV3.verdict)}` : ''}
+          {currentV3.confidence ? ` · Confidence ${String(currentV3.confidence)}` : ''}
+        </p>
+      ) : null}
+      {historicalV3 ? (
+        <p className="hint">
+          Historical V3: {String(historicalV3.run_status)} · Plan{' '}
+          {String(historicalV3.plan_status ?? 'UNKNOWN')} · Prompt{' '}
+          {String(historicalV3.prompt_version)}
+          {historicalV3.verdict ? ` · Verdict ${String(historicalV3.verdict)}` : ''}
         </p>
       ) : null}
     </div>

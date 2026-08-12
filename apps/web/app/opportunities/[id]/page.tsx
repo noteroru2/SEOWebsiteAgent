@@ -7,6 +7,7 @@ import {
   deterministicEvidencePacket,
   evidencePanelForOpportunity,
   evidenceReevaluationStateForOpportunity,
+  currentEvidenceV3,
 } from '@seo-agent/database';
 import {
   addOwnerEvidenceAction,
@@ -151,11 +152,9 @@ function EvidenceRequiredPanel({
   reevaluation: Awaited<ReturnType<typeof evidenceReevaluationStateForOpportunity>>;
 }) {
   const latestJob = reevaluation.latestJob as Record<string, unknown> | null;
-  const latestPayload = (latestJob?.payload ?? {}) as Record<string, unknown>;
-  const completedEvidencePacketHash =
-    latestJob?.status === 'SUCCEEDED' && typeof latestPayload.evidencePacketHash === 'string'
-      ? latestPayload.evidencePacketHash
-      : null;
+  const latestV3 = reevaluation.latestV3 as Record<string, unknown> | null;
+  const currentV3 = currentEvidenceV3(latestV3, evidencePacketHash);
+  const completedEvidencePacketHash = currentV3 ? String(currentV3.evidence_packet_hash) : null;
   const initialState: EvidenceReevaluationActionState = reevaluation.activeJob
     ? {
         status: String(reevaluation.activeJob.status) as 'QUEUED' | 'RUNNING',
@@ -171,7 +170,7 @@ function EvidenceRequiredPanel({
           jobId: String(latestJob.id),
           message: `Failed: ${safeJobFailure(latestJob)}`,
         }
-      : completedEvidencePacketHash === evidencePacketHash
+      : currentV3
         ? {
             status: 'SUCCEEDED',
             jobId: String(latestJob?.id ?? ''),
@@ -205,7 +204,8 @@ function EvidenceRequiredPanel({
           lastHeartbeat={
             reevaluation.lastHeartbeat ? new Date(reevaluation.lastHeartbeat).toISOString() : null
           }
-          latestV3={reevaluation.latestV3}
+          currentV3={currentV3}
+          historicalV3={currentV3 ? null : latestV3}
           currentEvidencePacketHash={evidencePacketHash}
           completedEvidencePacketHash={completedEvidencePacketHash}
         />

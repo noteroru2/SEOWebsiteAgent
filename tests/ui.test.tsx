@@ -9,6 +9,13 @@ import {
 } from '@seo-agent/database';
 
 vi.mock('@seo-agent/database', () => ({
+  currentEvidenceV3: (latest: Record<string, unknown> | null, hash: string) =>
+    latest &&
+    ['SUCCEEDED', 'REUSED'].includes(String(latest.run_status)) &&
+    latest.plan_status !== 'STALE' &&
+    latest.evidence_packet_hash === hash
+      ? latest
+      : null,
   siteSourceSummary: vi.fn(async () => null),
   sourcePanelForOpportunity: vi.fn(async () => ({
     configured: true,
@@ -382,6 +389,8 @@ describe('server-rendered UI foundations', () => {
         prompt_version: 'source-change-plan-prompt-v3',
         verdict: 'PROTECT_CURRENT_STATE',
         confidence: 'HIGH',
+        plan_status: 'READY_FOR_REVIEW',
+        evidence_packet_hash: 'b'.repeat(64),
       },
       workerHealthy: true,
       lastHeartbeat: new Date(),
@@ -395,6 +404,79 @@ describe('server-rendered UI foundations', () => {
     expect(html).toContain('<button disabled="">Complete</button>');
     expect(html).toContain('source-change-plan-prompt-v3');
     expect(html).toContain('Verdict PROTECT_CURRENT_STATE');
+  });
+  it('keeps a stale V3 visible only as history and requires explicit reevaluation', async () => {
+    vi.mocked(evidencePanelForOpportunity).mockResolvedValueOnce({
+      completeness: 'READY_FOR_REEVALUATION',
+      requests: [],
+    } as never);
+    vi.mocked(deterministicEvidencePacket).mockResolvedValueOnce({
+      packet: {},
+      evidencePacketHash: 'b'.repeat(64),
+      completeness: 'READY_FOR_REEVALUATION',
+    } as never);
+    vi.mocked(evidenceReevaluationStateForOpportunity).mockResolvedValueOnce({
+      latestJob: {
+        id: '44444444-4444-4444-8444-444444444444',
+        status: 'SUCCEEDED',
+        payload: { evidenceReevaluation: true, evidencePacketHash: 'a'.repeat(64) },
+      },
+      activeJob: null,
+      latestV3: {
+        run_id: '55555555-5555-4555-8555-555555555555',
+        run_status: 'SUCCEEDED',
+        prompt_version: 'source-change-plan-prompt-v3',
+        plan_status: 'STALE',
+        evidence_packet_hash: 'a'.repeat(64),
+        verdict: 'PROTECT_CURRENT_STATE',
+        confidence: 'HIGH',
+      },
+      workerHealthy: false,
+      lastHeartbeat: new Date(),
+    } as never);
+    const Detail = (await import('../apps/web/app/opportunities/[id]/page')).default;
+    const html = renderToStaticMarkup(
+      await Detail({
+        params: Promise.resolve({ id: '11111111-1111-4111-8111-111111111112' }),
+      }),
+    );
+    expect(html).toContain('Re-evaluate with Evidence');
+    expect(html).toContain('Ready for re-evaluation.');
+    expect(html).toContain('Historical V3: SUCCEEDED · Plan STALE');
+    expect(html).not.toContain('Complete for the current evidence packet.');
+    expect(html).not.toContain('V3 result: SUCCEEDED');
+  });
+  it('does not treat a non-stale packet mismatch as current', async () => {
+    vi.mocked(evidencePanelForOpportunity).mockResolvedValueOnce({
+      completeness: 'READY_FOR_REEVALUATION',
+      requests: [],
+    } as never);
+    vi.mocked(deterministicEvidencePacket).mockResolvedValueOnce({
+      packet: {},
+      evidencePacketHash: 'b'.repeat(64),
+      completeness: 'READY_FOR_REEVALUATION',
+    } as never);
+    vi.mocked(evidenceReevaluationStateForOpportunity).mockResolvedValueOnce({
+      latestJob: { id: 'job', status: 'SUCCEEDED', payload: {} },
+      activeJob: null,
+      latestV3: {
+        run_status: 'SUCCEEDED',
+        prompt_version: 'source-change-plan-prompt-v3',
+        plan_status: 'READY_FOR_REVIEW',
+        evidence_packet_hash: 'a'.repeat(64),
+      },
+      workerHealthy: false,
+      lastHeartbeat: new Date(),
+    } as never);
+    const Detail = (await import('../apps/web/app/opportunities/[id]/page')).default;
+    const html = renderToStaticMarkup(
+      await Detail({
+        params: Promise.resolve({ id: '11111111-1111-4111-8111-111111111112' }),
+      }),
+    );
+    expect(html).toContain('Re-evaluate with Evidence');
+    expect(html).toContain('Historical V3: SUCCEEDED');
+    expect(html).not.toContain('Complete for the current evidence packet.');
   });
   it('shows a bounded safe failure instead of raw worker details', async () => {
     vi.mocked(evidenceReevaluationStateForOpportunity).mockResolvedValueOnce({

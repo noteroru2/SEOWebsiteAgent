@@ -540,9 +540,11 @@ export async function evidenceReevaluationStateForOpportunity(
       [opportunityId],
     ),
     pool.query(
-      `SELECT r.id run_id,r.status run_status,r.prompt_version,r.source_evidence_hash,
-        r.failure_code,r.failure_summary,r.created_at,r.finished_at,p.id plan_id,p.verdict,p.confidence
+      `SELECT r.id run_id,r.job_id,r.status run_status,r.prompt_version,r.source_evidence_hash,
+        r.failure_code,r.failure_summary,r.created_at,r.finished_at,p.id plan_id,p.status plan_status,
+        p.verdict,p.confidence,j.payload->>'evidencePacketHash' evidence_packet_hash
        FROM source_plan_runs r LEFT JOIN source_change_plans p ON p.run_id=r.id
+       LEFT JOIN jobs j ON j.id=r.job_id
        WHERE r.opportunity_id=$1 AND r.prompt_version='source-change-plan-prompt-v3'
        ORDER BY r.created_at DESC LIMIT 1`,
       [opportunityId],
@@ -563,6 +565,20 @@ export async function evidenceReevaluationStateForOpportunity(
     ),
     lastHeartbeat,
   };
+}
+
+export function currentEvidenceV3(
+  latestV3: Record<string, unknown> | null,
+  currentEvidencePacketHash: string,
+) {
+  if (
+    !latestV3 ||
+    !['SUCCEEDED', 'REUSED'].includes(String(latestV3.run_status)) ||
+    latestV3.plan_status === 'STALE' ||
+    latestV3.evidence_packet_hash !== currentEvidencePacketHash
+  )
+    return null;
+  return latestV3;
 }
 
 export async function deterministicEvidencePacket(

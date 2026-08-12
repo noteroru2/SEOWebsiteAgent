@@ -10,6 +10,7 @@ import {
   recommendationResultSchema,
   type RecommendationContext,
 } from '@seo-agent/ai';
+import { resolveRecommendationLocale } from '@seo-agent/database';
 
 const types = [
   'STRIKING_DISTANCE_QUERY',
@@ -82,6 +83,11 @@ const validResult = {
 };
 
 describe('AI recommendation contract', () => {
+  it('uses the Thai query locale when an overlap opportunity has no mapped page', () => {
+    expect(resolveRecommendationLocale({ query: 'อําพล เทรดดิ้ง' })).toBe('th');
+    expect(resolveRecommendationLocale({ pageLanguage: 'en', query: 'อําพล เทรดดิ้ง' })).toBe('en');
+  });
+
   it('builds bounded deterministic contexts for every opportunity guidance type', () => {
     for (const type of types) {
       const first = buildProviderInput(context(type));

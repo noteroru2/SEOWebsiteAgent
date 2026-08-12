@@ -26,6 +26,18 @@ const clip = (value: unknown, max: number): string | null => {
   return String(value).slice(0, max);
 };
 
+export function resolveRecommendationLocale(input: {
+  pageLanguage?: unknown;
+  configuredLocale?: string;
+  query?: unknown;
+}) {
+  const pageLanguage = clip(input.pageLanguage, 32)?.trim();
+  if (pageLanguage) return pageLanguage;
+  const configuredLocale = input.configuredLocale?.trim();
+  if (configuredLocale) return configuredLocale;
+  return typeof input.query === 'string' && /[\u0E00-\u0E7F]/u.test(input.query) ? 'th' : 'en';
+}
+
 export async function loadRecommendationContext(
   opportunityId: string,
   siteId: string,
@@ -73,7 +85,11 @@ export async function loadRecommendationContext(
     issues = issueResult.rows.map((row) => ({ ...row, title: clip(row.title, 300) ?? '' }));
   }
   const evidence = (opportunity.evidence ?? {}) as Record<string, unknown>;
-  const locale = String(page?.language || process.env.SEO_RECOMMENDATION_LOCALE || 'en');
+  const locale = resolveRecommendationLocale({
+    pageLanguage: page?.language,
+    configuredLocale: process.env.SEO_RECOMMENDATION_LOCALE,
+    query: opportunity.query,
+  });
   return {
     site: { name: opportunity.site_name, baseUrl: opportunity.site_url, businessFacts: [], locale },
     opportunity: {

@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "@seo-agent/serp-capture": "0.1.0",
+    "playwright-core": "1.51.1"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "node esbuild.config.mjs",

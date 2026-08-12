@@ -380,6 +380,24 @@ td small {
 .ai-summary div {
   gap: 20px;
 }
+.fact-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 12px 0;
+  border-bottom: 1px solid #edf0ed;
+}
+.fact-row p {
+  margin: 4px 0 0;
+}
+.capture-review {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid #d7e0d9;
+  border-radius: 10px;
+  background: #fbfdfb;
+}
 @media (max-width: 800px) {
   .shell {
     display: block;

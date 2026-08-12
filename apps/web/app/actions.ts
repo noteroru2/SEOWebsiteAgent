@@ -14,6 +14,11 @@ import {
   evidenceReevaluationStateForOpportunity,
   resolveInternalEvidenceForSix,
   localDateTimeInTimeZoneToUtc,
+  confirmReusableOwnerFact,
+  enqueueSerpCapture,
+  confirmSerpCapture,
+  discardSerpCapture,
+  autoResolveOwnerBusinessConfirmation,
 } from '@seo-agent/database';
 import { inspectRepository } from '@seo-agent/source-understanding';
 import { createSiteSchema } from '@seo-agent/shared';
@@ -142,6 +147,7 @@ export async function refreshInternalEvidenceAction(opportunityId: string) {
   const refreshed = await resolveInternalEvidenceForSix();
   if (!refreshed.some((item) => item.opportunityId === opportunityId))
     throw new Error('Opportunity is outside the current evidence-resolution scope');
+  await autoResolveOwnerBusinessConfirmation(opportunityId);
   revalidatePath(`/opportunities/${opportunityId}`);
 }
 
@@ -291,5 +297,86 @@ export async function addOwnerEvidenceAction(
       notes: String(formData.get('notes') ?? '').trim() || null,
     },
   });
+  revalidatePath(`/opportunities/${opportunityId}`);
+}
+
+export async function confirmReusableOwnerFactAction(
+  opportunityId: string,
+  requestId: string,
+  factKey: string,
+) {
+  await confirmReusableOwnerFact({ opportunityId, requestId, factKey });
+  revalidatePath(`/opportunities/${opportunityId}`);
+}
+
+export async function captureSerpAction(
+  opportunityId: string,
+  requestId: string,
+  formData: FormData,
+) {
+  const device = String(formData.get('deviceProvenance') ?? '');
+  if (!['EMULATED_DESKTOP', 'EMULATED_MOBILE'].includes(device))
+    throw new Error('Supported emulated device required');
+  const location = String(formData.get('requestedLocationLabel') ?? '').trim();
+  const timezone = String(formData.get('timezone') ?? '').trim();
+  if (!location || !timezone) throw new Error('Location label and timezone are required');
+  const coordinate = (name: string) => {
+    const raw = String(formData.get(name) ?? '').trim();
+    return raw ? Number(raw) : null;
+  };
+  const latitude = coordinate('latitude');
+  const longitude = coordinate('longitude');
+  if ((latitude === null) !== (longitude === null))
+    throw new Error('Both coordinates are required');
+  if (latitude !== null && (!Number.isFinite(latitude) || latitude < -90 || latitude > 90))
+    throw new Error('Invalid latitude');
+  if (longitude !== null && (!Number.isFinite(longitude) || longitude < -180 || longitude > 180))
+    throw new Error('Invalid longitude');
+  await enqueueSerpCapture({
+    opportunityId,
+    requestId,
+    deviceProvenance: device as 'EMULATED_DESKTOP' | 'EMULATED_MOBILE',
+    requestedLocationLabel: location,
+    timezone,
+    latitude,
+    longitude,
+  });
+  revalidatePath(`/opportunities/${opportunityId}`);
+}
+
+export async function confirmSerpCaptureAction(
+  opportunityId: string,
+  captureId: string,
+  formData: FormData,
+) {
+  const required = (name: string) => {
+    const value = String(formData.get(name) ?? '').trim();
+    if (!value) throw new Error(`${name} is required`);
+    return value;
+  };
+  const rawPosition = String(formData.get('approximateOrganicPosition') ?? '').trim();
+  const approximateOrganicPosition = rawPosition ? Number(rawPosition) : null;
+  if (
+    approximateOrganicPosition !== null &&
+    (!Number.isInteger(approximateOrganicPosition) || approximateOrganicPosition < 1)
+  )
+    throw new Error('Organic position must be a positive integer');
+  await confirmSerpCapture({
+    opportunityId,
+    captureId,
+    displayedTitle: required('displayedTitle'),
+    displayedSnippet: required('displayedSnippet'),
+    rankingUrl: required('rankingUrl'),
+    approximateOrganicPosition,
+    serpFeatures: String(formData.get('serpFeatures') ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+  });
+  revalidatePath(`/opportunities/${opportunityId}`);
+}
+
+export async function discardSerpCaptureAction(opportunityId: string, captureId: string) {
+  await discardSerpCapture(captureId);
   revalidatePath(`/opportunities/${opportunityId}`);
 }

@@ -760,6 +760,81 @@ export const evidenceItems = pgTable(
   },
   (t) => [index('evidence_item_request_idx').on(t.requestId, t.createdAt)],
 );
+
+export const ownerFacts = pgTable(
+  'owner_facts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    factKey: text('fact_key').notNull(),
+    valueJson: jsonb('value_json').notNull(),
+    scopeType: text('scope_type').notNull(),
+    scopeKey: text('scope_key').notNull(),
+    status: text('status').notNull().default('ACTIVE'),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }).notNull().defaultNow(),
+    reviewAfter: timestamp('review_after', { withTimezone: true }),
+    sourceEvidenceItemId: uuid('source_evidence_item_id')
+      .notNull()
+      .references(() => evidenceItems.id, { onDelete: 'restrict' }),
+    confirmedBy: text('confirmed_by').notNull().default('OWNER'),
+    supersededAt: timestamp('superseded_at', { withTimezone: true }),
+    supersededBy: uuid('superseded_by'),
+    factHash: text('fact_hash').notNull(),
+    metadata: jsonb('metadata').notNull().default({}),
+    ...timestamps,
+  },
+  (t) => [
+    index('owner_facts_site_scope_idx').on(t.siteId, t.factKey, t.scopeType, t.scopeKey),
+    uniqueIndex('owner_facts_hash_unique_idx').on(t.factHash),
+  ],
+);
+
+export const serpCaptures = pgTable(
+  'serp_captures',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    opportunityId: uuid('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'cascade' }),
+    requestId: uuid('request_id')
+      .notNull()
+      .references(() => evidenceRequests.id, { onDelete: 'cascade' }),
+    jobId: uuid('job_id')
+      .unique()
+      .references(() => jobs.id, { onDelete: 'set null' }),
+    status: text('status').notNull().default('QUEUED'),
+    query: text('query').notNull(),
+    targetDomain: text('target_domain').notNull(),
+    deviceProvenance: text('device_provenance').notNull(),
+    requestedLocationLabel: text('requested_location_label').notNull(),
+    requestedGeolocation: jsonb('requested_geolocation'),
+    timezone: text('timezone').notNull(),
+    googleDisplayedLocation: text('google_displayed_location'),
+    captureNetworkContext: text('capture_network_context'),
+    machineCapture: jsonb('machine_capture'),
+    ownerConfirmedValue: jsonb('owner_confirmed_value'),
+    corrected: boolean('corrected').notNull().default(false),
+    screenshotPath: text('screenshot_path'),
+    screenshotSha256: text('screenshot_sha256'),
+    parserVersion: text('parser_version'),
+    positionExtractionVersion: text('position_extraction_version'),
+    capturedAt: timestamp('captured_at', { withTimezone: true }),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+    discardedAt: timestamp('discarded_at', { withTimezone: true }),
+    failureCode: text('failure_code'),
+    failureSummary: text('failure_summary'),
+    ...timestamps,
+  },
+  (t) => [
+    index('serp_captures_request_idx').on(t.requestId, t.createdAt),
+    index('serp_captures_status_idx').on(t.status, t.createdAt),
+  ],
+);
 export const approvals = pgTable(
   'approvals',
   {

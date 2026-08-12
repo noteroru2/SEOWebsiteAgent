@@ -100,6 +100,7 @@ export const jobTypes = [
   'ANALYZE_OPPORTUNITY',
   'REFRESH_SOURCE_REPOSITORY',
   'GENERATE_SOURCE_CHANGE_PLAN',
+  'CAPTURE_SERP',
 ] as const;
 export type JobType = (typeof jobTypes)[number];
 
@@ -134,6 +135,7 @@ export const enqueueJobSchema = z
       .string()
       .regex(/^[a-f0-9]{64}$/)
       .optional(),
+    captureId: z.string().uuid().optional(),
   })
   .superRefine((value, ctx) => {
     if (
@@ -158,6 +160,15 @@ export const enqueueJobSchema = z
         code: 'custom',
         path: ['opportunityId'],
         message: 'GENERATE_SOURCE_CHANGE_PLAN requires siteId and opportunityId',
+      });
+    if (
+      value.type === 'CAPTURE_SERP' &&
+      (!value.siteId || !value.opportunityId || !value.captureId)
+    )
+      ctx.addIssue({
+        code: 'custom',
+        path: ['captureId'],
+        message: 'CAPTURE_SERP requires siteId, opportunityId and captureId',
       });
   });
 

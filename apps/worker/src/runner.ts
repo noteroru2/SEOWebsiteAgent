@@ -37,6 +37,9 @@ import {
   failSourcePlanRun,
   missingDatesForWindow,
   deterministicEvidencePacket,
+  prepareSerpCaptureJob,
+  persistSerpCaptureSuccess,
+  persistSerpCaptureFailure,
   type Database,
 } from '@seo-agent/database';
 import { resourceGuardFromEnv, type ResourceGuard } from '@seo-agent/resource-guard';
@@ -74,6 +77,7 @@ import {
   refreshGoogleToken,
   type SearchConsoleApi,
 } from '@seo-agent/gsc';
+import { captureGoogleSerp } from '@seo-agent/serp-capture';
 
 export async function executeOne(
   workerId: string,
@@ -104,6 +108,44 @@ export async function executeOne(
         pool,
       );
       return { state: 'SUCCEEDED' as const, job: completed };
+    }
+    if (type === 'CAPTURE_SERP') {
+      const payload = (job.payload ?? {}) as { captureId?: string };
+      if (!payload.captureId)
+        throw Object.assign(new Error('SERP capture identity required'), {
+          code: 'CAPTURE_INVALID',
+        });
+      const capture = await prepareSerpCaptureJob(payload.captureId, pool);
+      try {
+        const result = await captureGoogleSerp({
+          captureId: String(capture.id),
+          query: String(capture.query),
+          targetDomain: String(capture.target_domain),
+          deviceProvenance: capture.device_provenance as 'EMULATED_DESKTOP' | 'EMULATED_MOBILE',
+          timezone: String(capture.timezone),
+          geolocation: capture.requested_geolocation as {
+            latitude: number;
+            longitude: number;
+          } | null,
+          artifactRoot: process.env.SERP_ARTIFACT_ROOT ?? '/app/artifacts/serp',
+          executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH,
+        });
+        const stored = await persistSerpCaptureSuccess(payload.captureId, result, pool);
+        await recordJobEvent(
+          id,
+          stored.status === 'CAPTURE_BLOCKED' ? 'SERP_CAPTURE_BLOCKED' : 'SERP_CAPTURED',
+          { captureId: stored.id, status: stored.status },
+          database,
+        );
+        return {
+          state: 'SUCCEEDED' as const,
+          job: await markJobSucceeded(id, { captureId: stored.id, status: stored.status }, pool),
+        };
+      } catch (error) {
+        const safe = error instanceof Error ? error : new Error('Unknown browser capture failure');
+        await persistSerpCaptureFailure(payload.captureId, 'CAPTURE_FAILED', safe.message, pool);
+        throw Object.assign(safe, { code: 'CAPTURE_FAILED' });
+      }
     }
     if (type === 'REFRESH_SOURCE_REPOSITORY') {
       const siteId = String(job.site_id ?? '');

@@ -8,6 +8,7 @@ import {
   evidencePanelForOpportunity,
   evidenceReevaluationStateForOpportunity,
   currentEvidenceV3,
+  evidenceAutomationPanelForOpportunity,
 } from '@seo-agent/database';
 import {
   addOwnerEvidenceAction,
@@ -18,6 +19,10 @@ import {
   enqueueSourcePlan,
   refreshInternalEvidenceAction,
   type EvidenceReevaluationActionState,
+  confirmReusableOwnerFactAction,
+  captureSerpAction,
+  confirmSerpCaptureAction,
+  discardSerpCaptureAction,
 } from '../../actions';
 import { EvidenceReevaluationControl } from './evidence-reevaluation-control';
 
@@ -28,14 +33,16 @@ export default async function OpportunityDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [data, ai, source, evidenceRequired, evidencePacket, reevaluation] = await Promise.all([
-    opportunityDetail(id),
-    aiPanelForOpportunity(id),
-    sourcePanelForOpportunity(id),
-    evidencePanelForOpportunity(id),
-    deterministicEvidencePacket(id),
-    evidenceReevaluationStateForOpportunity(id),
-  ]);
+  const [data, ai, source, evidenceRequired, evidencePacket, reevaluation, automation] =
+    await Promise.all([
+      opportunityDetail(id),
+      aiPanelForOpportunity(id),
+      sourcePanelForOpportunity(id),
+      evidencePanelForOpportunity(id),
+      deterministicEvidencePacket(id),
+      evidenceReevaluationStateForOpportunity(id),
+      evidenceAutomationPanelForOpportunity(id),
+    ]);
   if (!data) notFound();
   const item = data.opportunity;
   const evidence = item.evidence as Record<string, unknown>;
@@ -99,6 +106,7 @@ export default async function OpportunityDetailPage({
         siteId={String(item.site_id)}
         evidencePacketHash={evidencePacket.evidencePacketHash}
         reevaluation={reevaluation}
+        automation={automation}
       />
       <div className="grid section">
         <section className="panel">
@@ -143,6 +151,7 @@ function EvidenceRequiredPanel({
   siteId,
   evidencePacketHash,
   reevaluation,
+  automation,
 }: {
   evidence: Awaited<ReturnType<typeof evidencePanelForOpportunity>>;
   opportunityId: string;
@@ -150,6 +159,7 @@ function EvidenceRequiredPanel({
   siteId: string;
   evidencePacketHash: string;
   reevaluation: Awaited<ReturnType<typeof evidenceReevaluationStateForOpportunity>>;
+  automation: Awaited<ReturnType<typeof evidenceAutomationPanelForOpportunity>>;
 }) {
   const latestJob = reevaluation.latestJob as Record<string, unknown> | null;
   const latestV3 = reevaluation.latestV3 as Record<string, unknown> | null;
@@ -213,57 +223,311 @@ function EvidenceRequiredPanel({
       {!evidence.requests.length ? (
         <div className="empty compact-empty">No evidence requests for this opportunity.</div>
       ) : (
-        evidence.requests.map((request) => (
-          <article className="panel compact section" key={request.id}>
-            <strong>
-              {request.type} · {request.status}
-            </strong>
-            <p>{request.requirement}</p>
-            <p className="hint">
-              Why: {request.reason} · Source: {request.source}
-            </p>
-            {request.status === 'OPEN' && request.type === 'MANUAL_SERP_OBSERVATION' ? (
-              <form action={addSerpObservationAction.bind(null, opportunityId, request.id)}>
-                <input type="hidden" name="query" value={query} />
-                <label>
-                  Observed at
-                  <input name="observedAt" type="datetime-local" required />
-                </label>
-                <label>
-                  Timezone
-                  <input name="observedTimezone" value="Asia/Bangkok" readOnly required />
-                </label>
-                <input name="location" placeholder="Location" required />
-                <input name="device" placeholder="Device" required />
-                <input name="displayedTitle" placeholder="Displayed title" required />
-                <textarea name="displayedSnippet" placeholder="Displayed snippet" required />
-                <input name="rankingUrl" type="url" placeholder="Ranking URL" required />
-                <input
-                  name="approximatePosition"
-                  type="number"
-                  min="1"
-                  placeholder="Approx. position"
-                />
-                <input name="serpFeatures" placeholder="SERP features, comma-separated" />
-                <textarea name="notes" placeholder="Notes" />
-                <button>Add SERP Observation</button>
-              </form>
-            ) : null}
-            {request.status === 'OPEN' && request.type.startsWith('OWNER_') ? (
-              <form action={addOwnerEvidenceAction.bind(null, opportunityId, request.id)}>
-                <textarea name="statement" placeholder="Fact or ownership statement" required />
-                <input name="confirmation" placeholder="Confirmed value" required />
-                <input name="scope" placeholder="Opportunity-specific scope" required />
-                <textarea name="notes" placeholder="Notes" />
-                <button>
-                  {request.type === 'OWNER_QUERY_OWNERSHIP'
-                    ? 'Confirm Query Ownership'
-                    : 'Confirm Business Fact'}
-                </button>
-              </form>
-            ) : null}
-          </article>
-        ))
+        evidence.requests.map((request) => {
+          const captures = automation.captures.filter(
+            (capture) => capture.request_id === request.id,
+          );
+          const latestCapture = captures[0] as Record<string, unknown> | undefined;
+          const machine = (latestCapture?.machine_capture ?? {}) as Record<string, unknown>;
+          const features = (machine.features ?? {}) as Record<string, unknown>;
+          return (
+            <article className="panel compact section" key={request.id}>
+              <strong>
+                {request.type} · {request.status}
+              </strong>
+              <p>{request.requirement}</p>
+              <p className="hint">
+                Why: {request.reason} · Source: {request.source}
+              </p>
+              {request.status === 'OPEN' && request.type === 'MANUAL_SERP_OBSERVATION' ? (
+                <>
+                  <h3>Browser SERP capture</h3>
+                  <p className="hint">
+                    The query and target domain are fixed. Emulation is not a real-device
+                    observation. Capture remains unconfirmed until owner review.
+                  </p>
+                  {!latestCapture ||
+                  ['FAILED', 'CAPTURE_BLOCKED', 'DISCARDED', 'CONFIRMED'].includes(
+                    String(latestCapture.status),
+                  ) ? (
+                    <form action={captureSerpAction.bind(null, opportunityId, request.id)}>
+                      <p>
+                        <strong>Query:</strong> {query}
+                      </p>
+                      <p>
+                        <strong>Target domain:</strong> amphon.co.th
+                      </p>
+                      <label>
+                        Device
+                        <select name="deviceProvenance" defaultValue="EMULATED_DESKTOP">
+                          <option value="EMULATED_DESKTOP">Emulated Desktop</option>
+                          <option value="EMULATED_MOBILE">Emulated Mobile</option>
+                        </select>
+                      </label>
+                      <label>
+                        Requested location
+                        <input
+                          name="requestedLocationLabel"
+                          defaultValue="Ubon Ratchathani"
+                          required
+                        />
+                      </label>
+                      <label>
+                        Timezone
+                        <input name="timezone" value="Asia/Bangkok" readOnly required />
+                      </label>
+                      <div className="grid">
+                        <label>
+                          Latitude (optional)
+                          <input name="latitude" type="number" step="any" />
+                        </label>
+                        <label>
+                          Longitude (optional)
+                          <input name="longitude" type="number" step="any" />
+                        </label>
+                      </div>
+                      <button>Capture SERP</button>
+                    </form>
+                  ) : null}
+                </>
+              ) : null}
+              {request.status === 'RESOLVED' &&
+              request.type === 'MANUAL_SERP_OBSERVATION' &&
+              (!latestCapture ||
+                ['CONFIRMED', 'DISCARDED', 'FAILED', 'CAPTURE_BLOCKED'].includes(
+                  String(latestCapture.status),
+                )) ? (
+                <details>
+                  <summary>Add another SERP observation</summary>
+                  <p className="notice">
+                    Adding and confirming another observation changes evidence identity and may mark
+                    the current V3 plan STALE. It never starts reevaluation.
+                  </p>
+                  <form action={captureSerpAction.bind(null, opportunityId, request.id)}>
+                    <input type="hidden" name="requestedLocationLabel" value="Ubon Ratchathani" />
+                    <input type="hidden" name="timezone" value="Asia/Bangkok" />
+                    <label>
+                      Device
+                      <select name="deviceProvenance" defaultValue="EMULATED_DESKTOP">
+                        <option value="EMULATED_DESKTOP">Emulated Desktop</option>
+                        <option value="EMULATED_MOBILE">Emulated Mobile</option>
+                      </select>
+                    </label>
+                    <button>Capture another SERP</button>
+                  </form>
+                </details>
+              ) : null}
+              {latestCapture && ['QUEUED', 'CAPTURING'].includes(String(latestCapture.status)) ? (
+                <div className="notice">SERP capture: {String(latestCapture.status)}</div>
+              ) : null}
+              {latestCapture?.status === 'CAPTURE_BLOCKED' ? (
+                <div className="notice danger-text">
+                  CAPTURE_BLOCKED. Google returned a challenge. Use the manual observation workflow.
+                </div>
+              ) : null}
+              {latestCapture?.status === 'CAPTURED' ? (
+                <section className="capture-review">
+                  <h3>SERP Capture · awaiting owner confirmation</h3>
+                  <p className="hint">
+                    Captured {new Date(String(latestCapture.captured_at)).toLocaleString()} ·{' '}
+                    {String(latestCapture.timezone)} · {String(latestCapture.device_provenance)}
+                  </p>
+                  <p>
+                    <strong>Requested location:</strong>{' '}
+                    {String(latestCapture.requested_location_label)}
+                  </p>
+                  <p>
+                    <strong>Google displayed location:</strong>{' '}
+                    {String(latestCapture.google_displayed_location ?? 'UNKNOWN')}
+                  </p>
+                  <p>
+                    <a
+                      href={`/api/serp-captures/${latestCapture.id}/screenshot`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      View screenshot
+                    </a>{' '}
+                    · SHA256 {String(latestCapture.screenshot_sha256).slice(0, 12)}…
+                  </p>
+                  {Array.isArray(machine.lowConfidenceFields) &&
+                  machine.lowConfidenceFields.length ? (
+                    <div className="notice">
+                      Low confidence: {machine.lowConfidenceFields.join(', ')}
+                    </div>
+                  ) : null}
+                  <form
+                    action={confirmSerpCaptureAction.bind(
+                      null,
+                      opportunityId,
+                      String(latestCapture.id),
+                    )}
+                  >
+                    <label>
+                      Displayed title
+                      <input
+                        name="displayedTitle"
+                        defaultValue={String(machine.displayedTitle ?? '')}
+                        required
+                      />
+                    </label>
+                    <label>
+                      Displayed snippet
+                      <textarea
+                        name="displayedSnippet"
+                        defaultValue={String(machine.displayedSnippet ?? '')}
+                        required
+                      />
+                    </label>
+                    <label>
+                      Ranking URL
+                      <input
+                        name="rankingUrl"
+                        type="url"
+                        defaultValue={String(machine.resolvedLandingUrl ?? '')}
+                        required
+                      />
+                    </label>
+                    <label>
+                      Approximate organic position
+                      <input
+                        name="approximateOrganicPosition"
+                        type="number"
+                        min="1"
+                        defaultValue={
+                          machine.approximateOrganicPosition == null
+                            ? ''
+                            : String(machine.approximateOrganicPosition)
+                        }
+                      />
+                    </label>
+                    <label>
+                      SERP features
+                      <input
+                        name="serpFeatures"
+                        defaultValue={Object.entries(features)
+                          .filter(([, value]) => value === 'PRESENT')
+                          .map(([key]) => key)
+                          .join(', ')}
+                      />
+                    </label>
+                    <p className="hint">
+                      Corrections retain both machine-captured and owner-confirmed values.
+                    </p>
+                    <button>Confirm Observation</button>
+                  </form>
+                  <form
+                    action={discardSerpCaptureAction.bind(
+                      null,
+                      opportunityId,
+                      String(latestCapture.id),
+                    )}
+                  >
+                    <button className="danger">Discard</button>
+                  </form>
+                </section>
+              ) : null}
+              {request.status === 'OPEN' && request.type === 'MANUAL_SERP_OBSERVATION' ? (
+                <details>
+                  <summary>Use manual real-device observation instead</summary>
+                  <form action={addSerpObservationAction.bind(null, opportunityId, request.id)}>
+                    <input type="hidden" name="query" value={query} />
+                    <label>
+                      Observed at
+                      <input name="observedAt" type="datetime-local" required />
+                    </label>
+                    <label>
+                      Timezone
+                      <input name="observedTimezone" value="Asia/Bangkok" readOnly required />
+                    </label>
+                    <input name="location" placeholder="Location" required />
+                    <input name="device" placeholder="Device" required />
+                    <input name="displayedTitle" placeholder="Displayed title" required />
+                    <textarea name="displayedSnippet" placeholder="Displayed snippet" required />
+                    <input name="rankingUrl" type="url" placeholder="Ranking URL" required />
+                    <input
+                      name="approximatePosition"
+                      type="number"
+                      min="1"
+                      placeholder="Approx. position"
+                    />
+                    <input name="serpFeatures" placeholder="SERP features, comma-separated" />
+                    <textarea name="notes" placeholder="Notes" />
+                    <button>Add SERP Observation</button>
+                  </form>
+                </details>
+              ) : null}
+              {request.status === 'OPEN' &&
+              request.type === 'OWNER_BUSINESS_CONFIRMATION' &&
+              automation.facts.requirements.length ? (
+                <section>
+                  <h3>Business facts required</h3>
+                  <p className="hint">
+                    {automation.facts.requirements.filter((item) => item.match).length} reusable
+                    facts found ·{' '}
+                    {automation.facts.requirements.filter((item) => !item.match).length} owner
+                    confirmations required
+                  </p>
+                  {automation.facts.requirements.map((state) => (
+                    <div className="fact-row" key={state.requirement.factKey}>
+                      <div>
+                        <strong>
+                          {state.match ? '✓' : state.conflict || state.expired ? '!' : '○'}{' '}
+                          {state.requirement.label}
+                        </strong>
+                        <p className="hint">
+                          {state.match
+                            ? 'Confirmed previously · OWNER_CONFIRMED_REUSED'
+                            : state.conflict
+                              ? 'Conflicting active facts require owner review'
+                              : state.expired
+                                ? 'Needs owner reconfirmation'
+                                : `Missing · ${state.requirement.scopeType}:${state.requirement.scopeKey}`}
+                        </p>
+                      </div>
+                      {!state.match && !state.conflict ? (
+                        <form
+                          action={confirmReusableOwnerFactAction.bind(
+                            null,
+                            opportunityId,
+                            request.id,
+                            state.requirement.factKey,
+                          )}
+                        >
+                          <button>Confirm fact</button>
+                        </form>
+                      ) : null}
+                    </div>
+                  ))}
+                </section>
+              ) : null}
+              {request.status === 'RESOLVED' &&
+              request.type === 'OWNER_BUSINESS_CONFIRMATION' &&
+              automation.facts.complete ? (
+                <div className="notice">
+                  Resolved automatically from {automation.facts.requirements.length} reusable owner
+                  facts. Original owner provenance retained.
+                </div>
+              ) : null}
+              {request.status === 'OPEN' &&
+              request.type.startsWith('OWNER_') &&
+              (request.type !== 'OWNER_BUSINESS_CONFIRMATION' ||
+                automation.facts.requirements.length === 0) ? (
+                <form action={addOwnerEvidenceAction.bind(null, opportunityId, request.id)}>
+                  <textarea name="statement" placeholder="Fact or ownership statement" required />
+                  <input name="confirmation" placeholder="Confirmed value" required />
+                  <input name="scope" placeholder="Opportunity-specific scope" required />
+                  <textarea name="notes" placeholder="Notes" />
+                  <button>
+                    {request.type === 'OWNER_QUERY_OWNERSHIP'
+                      ? 'Confirm Query Ownership'
+                      : 'Confirm Business Fact'}
+                  </button>
+                </form>
+              ) : null}
+            </article>
+          );
+        })
       )}
     </section>
   );

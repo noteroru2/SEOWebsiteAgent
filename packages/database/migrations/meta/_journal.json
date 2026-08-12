@@ -64,6 +64,13 @@
       "when": 1786531200000,
       "tag": "0008_owner_evidence_timezone",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786536000000,
+      "tag": "0009_evidence_automation",
+      "breakpoints": true
     }
   ]
 }

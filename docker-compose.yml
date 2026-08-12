@@ -33,6 +33,8 @@ services:
       AI_SITE_MONTHLY_BUDGET_USD: ${AI_SITE_MONTHLY_BUDGET_USD:-8.50}
     ports:
       - '3000:3000'
+    volumes:
+      - serp_artifacts:/app/artifacts/serp:ro
     depends_on:
       migrate: { condition: service_completed_successfully }
     healthcheck:
@@ -78,11 +80,16 @@ services:
       AI_PRICE_SOL_CACHED_INPUT_USD_PER_MILLION: ${AI_PRICE_SOL_CACHED_INPUT_USD_PER_MILLION:-0.5}
       AI_PRICE_SOL_OUTPUT_USD_PER_MILLION: ${AI_PRICE_SOL_OUTPUT_USD_PER_MILLION:-30}
       SEO_RECOMMENDATION_LOCALE: ${SEO_RECOMMENDATION_LOCALE:-}
+      SERP_ARTIFACT_ROOT: /app/artifacts/serp
+      PLAYWRIGHT_CHROMIUM_PATH: /usr/bin/chromium-browser
     volumes:
       - type: bind
         source: ${SOURCE_REPO_HOST_ROOT:?SOURCE_REPO_HOST_ROOT is required for the worker}
         target: /source-repos
         read_only: true
+      - type: volume
+        source: serp_artifacts
+        target: /app/artifacts/serp
     depends_on:
       migrate: { condition: service_completed_successfully }
     healthcheck:
@@ -92,7 +99,7 @@ services:
       retries: 4
     deploy:
       resources:
-        limits: { cpus: '0.50', memory: 256M }
+        limits: { cpus: '0.50', memory: 768M }
   migrate:
     build:
       context: .
@@ -108,3 +115,4 @@ services:
         limits: { cpus: '0.25', memory: 128M }
 volumes:
   seo_agent_db:
+  serp_artifacts:

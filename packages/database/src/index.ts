@@ -11,6 +11,7 @@ export * from './opportunities';
 export * from './ai-recommendations';
 export * from './source-plans';
 export * from './evidence-resolution';
+export * from './evidence-automation';
 export type Database = ReturnType<typeof drizzle<typeof schema>>;
 let singleton: { pool: Pool; db: Database } | undefined;
 
@@ -47,16 +48,19 @@ export async function enqueueJob(input: unknown, database = getDatabase().db) {
     type: value.type,
     siteId: value.siteId,
     heavy: !deduplicatedTypes.includes(value.type),
-    payload: ['ANALYZE_OPPORTUNITY', 'GENERATE_SOURCE_CHANGE_PLAN'].includes(value.type)
-      ? {
-          opportunityId: value.opportunityId,
-          reanalyze: value.reanalyze === true,
-          evidenceReevaluation: value.evidenceReevaluation === true,
-          evidencePacketHash: value.evidencePacketHash,
-        }
-      : value.mode
-        ? { mode: value.mode }
-        : {},
+    payload:
+      value.type === 'CAPTURE_SERP'
+        ? { opportunityId: value.opportunityId, captureId: value.captureId }
+        : ['ANALYZE_OPPORTUNITY', 'GENERATE_SOURCE_CHANGE_PLAN'].includes(value.type)
+          ? {
+              opportunityId: value.opportunityId,
+              reanalyze: value.reanalyze === true,
+              evidenceReevaluation: value.evidenceReevaluation === true,
+              evidencePacketHash: value.evidencePacketHash,
+            }
+          : value.mode
+            ? { mode: value.mode }
+            : {},
   });
   const [job] = deduplicatedTypes.includes(value.type)
     ? await insert.onConflictDoNothing().returning()
@@ -313,6 +317,10 @@ export async function claimNextJob(workerId: string, pool = getDatabase().pool) 
          AND (candidate.heavy=false OR NOT EXISTS (SELECT 1 FROM jobs running WHERE running.status='RUNNING' AND running.heavy=true))
          AND (candidate.type<>'ANALYZE_OPPORTUNITY' OR NOT EXISTS (
            SELECT 1 FROM jobs running_ai WHERE running_ai.status='RUNNING' AND running_ai.type='ANALYZE_OPPORTUNITY'
+         ))
+         AND (candidate.type NOT IN ('ANALYZE_OPPORTUNITY','GENERATE_SOURCE_CHANGE_PLAN','CAPTURE_SERP') OR NOT EXISTS (
+           SELECT 1 FROM jobs running_bounded WHERE running_bounded.status='RUNNING'
+             AND running_bounded.type IN ('ANALYZE_OPPORTUNITY','GENERATE_SOURCE_CHANGE_PLAN','CAPTURE_SERP')
          ))
         ORDER BY candidate.created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`,
       [workerId],
@@ -601,6 +609,7 @@ export const registeredJobTypes: ReadonlySet<JobType> = new Set([
   'ANALYZE_OPPORTUNITY',
   'REFRESH_SOURCE_REPOSITORY',
   'GENERATE_SOURCE_CHANGE_PLAN',
+  'CAPTURE_SERP',
 ]);
 
 export async function createGscOAuthState(

@@ -1,4 +1,7 @@
 import type { Pool } from 'pg';
+import { createHash, randomBytes } from 'node:crypto';
+import type { AssistedCapturePayload } from '@seo-agent/serp-capture';
+import { ASSISTED_CAPTURE_VERSION, resolveGoogleHref } from '@seo-agent/serp-capture';
 import { evidenceHash, recordEvidenceItem } from './evidence-resolution';
 import { getDatabase } from './index';
 
@@ -10,6 +13,155 @@ export const ownerFactScopeTypes = [
   'SERVICE_GEOGRAPHY',
   'QUERY',
 ] as const;
+
+export const BROWSER_CAPTURE_TOKEN_TTL_MS = 10 * 60 * 1_000;
+
+const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
+
+function normalizedHost(value: string) {
+  return new URL(value).hostname.toLowerCase().replace(/^www\./, '');
+}
+
+export function classifyRealBrowserDevice(userAgent: string) {
+  if (/Mobile|Android|iPhone|iPad|iPod/i.test(userAgent)) return 'REAL_MOBILE_BROWSER' as const;
+  if (/Chrome|Chromium|Firefox|Safari|Edg\//i.test(userAgent))
+    return 'REAL_DESKTOP_BROWSER' as const;
+  return 'UNKNOWN_REAL_BROWSER' as const;
+}
+
+export async function createBrowserCaptureToken(
+  input: {
+    opportunityId: string;
+    requestId: string;
+    ownerDeclaredLocation: string;
+  },
+  pool: Pool = getDatabase().pool,
+) {
+  const location = input.ownerDeclaredLocation.trim();
+  if (!location || location.length > 200) throw new Error('Owner-declared location is required');
+  const selected = await pool.query(
+    `SELECT r.type,o.site_id,o.query,s.url FROM evidence_requests r
+     JOIN opportunities o ON o.id=r.opportunity_id JOIN sites s ON s.id=o.site_id
+     WHERE r.id=$1 AND r.opportunity_id=$2`,
+    [input.requestId, input.opportunityId],
+  );
+  const row = selected.rows[0];
+  if (!row || row.type !== 'MANUAL_SERP_OBSERVATION')
+    throw new Error('SERP evidence request required');
+  if (!row.query) throw new Error('Opportunity query required');
+  const targetDomain = normalizedHost(row.url);
+  if (targetDomain !== 'amphon.co.th') throw new Error('Assisted capture target is not approved');
+  const token = randomBytes(32).toString('base64url');
+  const expiresAt = new Date(Date.now() + BROWSER_CAPTURE_TOKEN_TTL_MS);
+  await pool.query(
+    `INSERT INTO browser_capture_tokens(site_id,opportunity_id,request_id,token_hash,expected_query,
+     target_domain,owner_declared_location,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [
+      row.site_id,
+      input.opportunityId,
+      input.requestId,
+      tokenHash(token),
+      row.query,
+      targetDomain,
+      location,
+      expiresAt,
+    ],
+  );
+  return {
+    token,
+    expiresAt,
+    expectedQuery: String(row.query),
+    targetDomain,
+    opportunityId: input.opportunityId,
+  };
+}
+
+export async function ingestOwnerAssistedCapture(
+  payload: AssistedCapturePayload,
+  pool: Pool = getDatabase().pool,
+) {
+  const capturedAt = new Date(payload.capturedAt);
+  if (Math.abs(Date.now() - capturedAt.getTime()) > 30 * 60 * 1_000)
+    throw new Error('Capture timestamp is outside the accepted window');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const selected = await client.query(
+      `SELECT * FROM browser_capture_tokens WHERE token_hash=$1 FOR UPDATE`,
+      [tokenHash(payload.token)],
+    );
+    const grant = selected.rows[0];
+    if (!grant || grant.consumed_at || new Date(grant.expires_at).getTime() <= Date.now())
+      throw new Error('Capture token is invalid, expired, or already used');
+    if (payload.opportunityId !== grant.opportunity_id)
+      throw new Error('Capture opportunity does not match token');
+    if (payload.query !== grant.expected_query)
+      throw new Error('Displayed query does not match token');
+    if (payload.resolvedLandingUrl) {
+      if (normalizedHost(payload.resolvedLandingUrl) !== grant.target_domain)
+        throw new Error('Captured landing URL is outside the fixed target domain');
+      if (payload.rawHref) {
+        const decoded = resolveGoogleHref(payload.rawHref);
+        if (new URL(decoded).toString() !== new URL(payload.resolvedLandingUrl).toString())
+          throw new Error('Resolved landing URL does not match raw Google href');
+      }
+    }
+    const deviceProvenance = classifyRealBrowserDevice(payload.userAgent);
+    const machineCapture = {
+      blocked: false,
+      displayedTitle: payload.displayedTitle,
+      displayedSnippet: payload.displayedSnippet,
+      rawGoogleHref: payload.rawHref,
+      resolvedLandingUrl: payload.resolvedLandingUrl,
+      approximateOrganicPosition: payload.approximateOrganicPosition,
+      features: payload.features,
+      lowConfidenceFields: payload.lowConfidenceFields,
+      parserVersion: payload.collectorVersion,
+      positionExtractionVersion: 'organic-position-v1',
+      provenance: 'OWNER_ASSISTED_BROWSER_CAPTURE',
+      deviceProvenance,
+      browserContext: {
+        userAgent: payload.userAgent,
+        viewport: payload.viewport,
+        timezone: payload.timezone,
+      },
+      ownerDeclaredLocation: grant.owner_declared_location,
+      googleDisplayedLocation: payload.googleDisplayedLocation,
+    };
+    const inserted = await client.query(
+      `INSERT INTO serp_captures(site_id,opportunity_id,request_id,status,query,target_domain,
+       device_provenance,requested_location_label,timezone,google_displayed_location,
+       capture_network_context,machine_capture,parser_version,position_extraction_version,captured_at)
+       VALUES($1,$2,$3,'CAPTURED',$4,$5,$6,$7,$8,$9,'REAL_BROWSER_SESSION',$10::jsonb,$11,$12,$13)
+       RETURNING *`,
+      [
+        grant.site_id,
+        grant.opportunity_id,
+        grant.request_id,
+        grant.expected_query,
+        grant.target_domain,
+        deviceProvenance,
+        grant.owner_declared_location,
+        payload.timezone,
+        payload.googleDisplayedLocation,
+        JSON.stringify(machineCapture),
+        ASSISTED_CAPTURE_VERSION,
+        'organic-position-v1',
+        capturedAt,
+      ],
+    );
+    await client.query(`UPDATE browser_capture_tokens SET consumed_at=now() WHERE id=$1`, [
+      grant.id,
+    ]);
+    await client.query('COMMIT');
+    return inserted.rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
 
 export type OwnerFactRequirement = {
   factKey: string;
@@ -432,11 +584,14 @@ export async function confirmSerpCapture(
     const capture = selected.rows[0];
     if (!capture) throw new Error('Captured SERP observation required');
     const machine = capture.machine_capture as Record<string, unknown>;
+    if (normalizedHost(input.rankingUrl) !== capture.target_domain)
+      throw new Error('Confirmed ranking URL is outside the fixed target domain');
     const owner = {
       query: capture.query,
       observedAt: new Date(capture.captured_at).toISOString(),
       observedTimezone: capture.timezone,
       requestedLocationLabel: capture.requested_location_label,
+      ownerDeclaredLocation: capture.requested_location_label,
       requestedGeolocation: capture.requested_geolocation,
       googleDisplayedLocation: capture.google_displayed_location ?? 'UNKNOWN',
       captureNetworkContext: capture.capture_network_context ?? 'UNKNOWN',

@@ -6,6 +6,7 @@
   "exports": "./src/index.ts",
   "dependencies": {
     "cheerio": "latest",
-    "playwright-core": "1.51.1"
+    "playwright-core": "1.51.1",
+    "zod": "latest"
   }
 }

@@ -835,6 +835,33 @@ export const serpCaptures = pgTable(
     index('serp_captures_status_idx').on(t.status, t.createdAt),
   ],
 );
+
+export const browserCaptureTokens = pgTable(
+  'browser_capture_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    opportunityId: uuid('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'cascade' }),
+    requestId: uuid('request_id')
+      .notNull()
+      .references(() => evidenceRequests.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull(),
+    expectedQuery: text('expected_query').notNull(),
+    targetDomain: text('target_domain').notNull(),
+    ownerDeclaredLocation: text('owner_declared_location').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('browser_capture_tokens_hash_unique_idx').on(t.tokenHash),
+    index('browser_capture_tokens_request_idx').on(t.requestId, t.createdAt),
+  ],
+);
 export const approvals = pgTable(
   'approvals',
   {

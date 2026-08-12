@@ -1,14 +1,17 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import {
   autoResolveOwnerBusinessConfirmation,
   classifyOwnerFactCandidates,
   confirmReusableOwnerFact,
   confirmSerpCapture,
+  createBrowserCaptureToken,
   createDatabase,
   createSite,
   deterministicEvidencePacket,
   enqueueSerpCapture,
+  ingestOwnerAssistedCapture,
   ensureEvidenceRequest,
   ownerFactStateForOpportunity,
   persistSerpCaptureSuccess,
@@ -16,11 +19,22 @@ import {
 } from '@seo-agent/database';
 import {
   extractGoogleSerp,
+  assistedCapturePayloadSchema,
+  assistedCapturePayloadWithinBounds,
+  ASSISTED_CAPTURE_MAX_BYTES,
+  ASSISTED_CAPTURE_VERSION,
+  createOwnerAssistedBookmarklet,
+  isAllowedGoogleOrigin,
   POSITION_EXTRACTION_VERSION,
   resolveGoogleHref,
   SERP_PARSER_VERSION,
 } from '@seo-agent/serp-capture';
+import type { AssistedCapturePayload } from '@seo-agent/serp-capture';
 import { requireTestDatabaseUrl, resetTestDatabase } from '../packages/database/src/test-safety';
+import {
+  OPTIONS as assistedCaptureOptions,
+  POST as assistedCapturePost,
+} from '../apps/web/app/api/browser-captures/ingest/route';
 
 const result = (
   href = 'https://amphon.co.th/target',
@@ -93,6 +107,72 @@ describe('deterministic Google SERP parser v1', () => {
     expect(parsed.lowConfidenceFields).toContain('displayedSnippet');
     expect(parsed.lowConfidenceFields).toContain('domStructure');
     expect(Object.values(parsed.features).every((value) => value === 'UNKNOWN')).toBe(true);
+  });
+
+  it('accepts only explicit Google HTTPS origins for assisted ingestion', () => {
+    expect(isAllowedGoogleOrigin('https://www.google.com')).toBe(true);
+    expect(isAllowedGoogleOrigin('https://www.google.co.th')).toBe(true);
+    expect(isAllowedGoogleOrigin('http://www.google.com')).toBe(false);
+    expect(isAllowedGoogleOrigin('https://google.com.example.test')).toBe(false);
+    expect(isAllowedGoogleOrigin(null)).toBe(false);
+  });
+
+  it('generates a fixed local collector without cookie or browser storage collection', () => {
+    const bookmarklet = createOwnerAssistedBookmarklet({
+      endpoint: 'http://localhost:3000/api/browser-captures/ingest',
+      token: 't'.repeat(43),
+      opportunityId: '00000000-0000-4000-8000-000000000001',
+      expectedQuery: 'notebook query',
+      targetDomain: 'amphon.co.th',
+    });
+    expect(bookmarklet.startsWith('javascript:')).toBe(true);
+    expect(() => new Function(bookmarklet.slice('javascript:'.length))).not.toThrow();
+    expect(bookmarklet).toContain('amphon.co.th');
+    expect(bookmarklet).not.toContain('document.cookie');
+    expect(bookmarklet).not.toContain('localStorage');
+    expect(bookmarklet).not.toContain('sessionStorage');
+  });
+
+  it('rejects malformed and oversized assisted payloads', () => {
+    expect(assistedCapturePayloadSchema.safeParse({ token: 'x' }).success).toBe(false);
+    expect(assistedCapturePayloadWithinBounds('x'.repeat(ASSISTED_CAPTURE_MAX_BYTES))).toBe(true);
+    expect(assistedCapturePayloadWithinBounds('x'.repeat(ASSISTED_CAPTURE_MAX_BYTES + 1))).toBe(
+      false,
+    );
+  });
+
+  it('enforces CORS and payload bounds at the assisted ingestion endpoint', async () => {
+    const allowed = await assistedCaptureOptions(
+      new Request('http://localhost:3000/api/browser-captures/ingest', {
+        method: 'OPTIONS',
+        headers: { Origin: 'https://www.google.co.th' },
+      }),
+    );
+    expect(allowed.status).toBe(204);
+    expect(allowed.headers.get('access-control-allow-origin')).toBe('https://www.google.co.th');
+    const denied = await assistedCaptureOptions(
+      new Request('http://localhost:3000/api/browser-captures/ingest', {
+        method: 'OPTIONS',
+        headers: { Origin: 'https://example.com' },
+      }),
+    );
+    expect(denied.status).toBe(403);
+    const oversized = await assistedCapturePost(
+      new Request('http://localhost:3000/api/browser-captures/ingest', {
+        method: 'POST',
+        headers: { Origin: 'https://www.google.com' },
+        body: 'x'.repeat(ASSISTED_CAPTURE_MAX_BYTES + 1),
+      }),
+    );
+    expect(oversized.status).toBe(413);
+    const malformed = await assistedCapturePost(
+      new Request('http://localhost:3000/api/browser-captures/ingest', {
+        method: 'POST',
+        headers: { Origin: 'https://www.google.com' },
+        body: JSON.stringify({ token: 'x' }),
+      }),
+    );
+    expect(malformed.status).toBe(400);
   });
 });
 
@@ -367,5 +447,175 @@ describe('evidence automation database workflow', () => {
       ).rows[0].n,
     ).toBe(0);
     expect((await database.pool.query(`SELECT count(*)::int n FROM ai_usage`)).rows[0].n).toBe(0);
+  });
+
+  it('authenticates a one-time assisted capture, fixes its identity, and accepts target-missing UNKNOWN data', async () => {
+    const before = await deterministicEvidencePacket(opportunityId, database.pool);
+    const grant = await createBrowserCaptureToken(
+      {
+        opportunityId,
+        requestId: serpRequestId,
+        ownerDeclaredLocation: 'Ubon Ratchathani, Thailand',
+      },
+      database.pool,
+    );
+    const payload: AssistedCapturePayload = {
+      token: grant.token,
+      opportunityId,
+      query: grant.expectedQuery,
+      capturedAt: new Date().toISOString(),
+      timezone: 'Asia/Bangkok',
+      userAgent: 'Mozilla/5.0 Chrome/140.0 Safari/537.36',
+      viewport: { width: 1440, height: 900 },
+      googleDisplayedLocation: null,
+      displayedTitle: null,
+      displayedSnippet: null,
+      rawHref: null,
+      resolvedLandingUrl: null,
+      approximateOrganicPosition: null,
+      features: {
+        ADS: 'UNKNOWN' as const,
+        AI_OVERVIEW: 'UNKNOWN' as const,
+        MAP_PACK: 'UNKNOWN' as const,
+        PEOPLE_ALSO_ASK: 'UNKNOWN' as const,
+        SHOPPING_OR_PRODUCT_RESULTS: 'UNKNOWN' as const,
+        OTHER: 'UNKNOWN' as const,
+      },
+      lowConfidenceFields: ['domStructure', 'approximateOrganicPosition'],
+      collectorVersion: ASSISTED_CAPTURE_VERSION,
+    };
+    const capture = await ingestOwnerAssistedCapture(payload, database.pool);
+    expect(capture).toMatchObject({
+      status: 'CAPTURED',
+      device_provenance: 'REAL_DESKTOP_BROWSER',
+      requested_location_label: 'Ubon Ratchathani, Thailand',
+      job_id: null,
+    });
+    expect(capture.machine_capture.provenance).toBe('OWNER_ASSISTED_BROWSER_CAPTURE');
+    expect((await database.pool.query(`SELECT count(*)::int n FROM jobs`)).rows[0].n).toBe(0);
+    await expect(ingestOwnerAssistedCapture(payload, database.pool)).rejects.toThrow(
+      'invalid, expired, or already used',
+    );
+    const repository = (
+      await database.pool.query(
+        `INSERT INTO site_repositories(site_id,local_path) VALUES($1,'C:/fixture') RETURNING id`,
+        [siteId],
+      )
+    ).rows[0];
+    const planRun = (
+      await database.pool.query(
+        `INSERT INTO source_plan_runs(site_id,opportunity_id,repository_id,status,model,
+         reasoning_effort,prompt_version,schema_version,repository_head_sha,source_evidence_hash)
+         VALUES($1,$2,$3,'SUCCEEDED','fixture','medium','source-change-plan-prompt-v3','v1',$4,$5)
+         RETURNING id`,
+        [siteId, opportunityId, repository.id, 'a'.repeat(40), before.evidencePacketHash],
+      )
+    ).rows[0];
+    const planId = (
+      await database.pool.query(
+        `INSERT INTO source_change_plans(run_id,site_id,opportunity_id,verdict,confidence,
+         batch5_reconciliation,summary,structured_output,status)
+         VALUES($1,$2,$3,'NEEDS_MORE_EVIDENCE','MEDIUM','REFINED','fixture','{}','READY_FOR_REVIEW')
+         RETURNING id`,
+        [planRun.id, siteId, opportunityId],
+      )
+    ).rows[0].id;
+    const confirmation = await confirmSerpCapture(
+      {
+        opportunityId,
+        captureId: capture.id,
+        displayedTitle: 'Owner-confirmed AMPHON title',
+        displayedSnippet: 'Owner-confirmed Thai snippet',
+        rankingUrl: 'https://amphon.co.th/notebook',
+        approximateOrganicPosition: 3,
+        serpFeatures: [],
+      },
+      database.pool,
+    );
+    expect(confirmation.corrected).toBe(true);
+    const stored = (
+      await database.pool.query(
+        `SELECT machine_capture,owner_confirmed_value,corrected FROM serp_captures WHERE id=$1`,
+        [capture.id],
+      )
+    ).rows[0];
+    expect(stored.machine_capture.displayedTitle).toBeNull();
+    expect(stored.owner_confirmed_value.displayedTitle).toBe('Owner-confirmed AMPHON title');
+    expect(stored.owner_confirmed_value.provenance).toBe('OWNER_CONFIRMED_BROWSER_CAPTURE');
+    expect(stored.corrected).toBe(true);
+    const after = await deterministicEvidencePacket(opportunityId, database.pool);
+    expect(after.evidencePacketHash).not.toBe(before.evidencePacketHash);
+    expect(
+      (await database.pool.query(`SELECT status FROM source_change_plans WHERE id=$1`, [planId]))
+        .rows[0].status,
+    ).toBe('STALE');
+    expect((await database.pool.query(`SELECT count(*)::int n FROM ai_usage`)).rows[0].n).toBe(0);
+  });
+
+  it('rejects expired, wrong-opportunity, wrong-query, and wrong-domain assisted captures', async () => {
+    const make = async () =>
+      createBrowserCaptureToken(
+        { opportunityId, requestId: serpRequestId, ownerDeclaredLocation: 'Ubon' },
+        database.pool,
+      );
+    const base = (grant: Awaited<ReturnType<typeof make>>): AssistedCapturePayload => ({
+      token: grant.token,
+      opportunityId,
+      query: grant.expectedQuery,
+      capturedAt: new Date().toISOString(),
+      timezone: 'Asia/Bangkok',
+      userAgent: 'Mozilla/5.0 Chrome/140.0 Safari/537.36',
+      viewport: { width: 1280, height: 800 },
+      googleDisplayedLocation: 'Ubon Ratchathani',
+      displayedTitle: 'AMPHON',
+      displayedSnippet: 'Thai snippet',
+      rawHref: 'https://www.google.com/url?q=https%3A%2F%2Famphon.co.th%2Ftarget',
+      resolvedLandingUrl: 'https://amphon.co.th/target',
+      approximateOrganicPosition: 2,
+      features: {
+        ADS: 'PRESENT' as const,
+        AI_OVERVIEW: 'UNKNOWN' as const,
+        MAP_PACK: 'UNKNOWN' as const,
+        PEOPLE_ALSO_ASK: 'PRESENT' as const,
+        SHOPPING_OR_PRODUCT_RESULTS: 'UNKNOWN' as const,
+        OTHER: 'UNKNOWN' as const,
+      },
+      lowConfidenceFields: [],
+      collectorVersion: ASSISTED_CAPTURE_VERSION,
+    });
+
+    const wrongOpportunity = await make();
+    await expect(
+      ingestOwnerAssistedCapture(
+        { ...base(wrongOpportunity), opportunityId: '00000000-0000-4000-8000-000000000001' },
+        database.pool,
+      ),
+    ).rejects.toThrow('opportunity');
+
+    const wrongQuery = await make();
+    await expect(
+      ingestOwnerAssistedCapture({ ...base(wrongQuery), query: 'wrong query' }, database.pool),
+    ).rejects.toThrow('query');
+
+    const wrongDomain = await make();
+    await expect(
+      ingestOwnerAssistedCapture(
+        {
+          ...base(wrongDomain),
+          rawHref: 'https://example.com/',
+          resolvedLandingUrl: 'https://example.com/',
+        },
+        database.pool,
+      ),
+    ).rejects.toThrow('target domain');
+
+    const expired = await make();
+    await database.pool.query(
+      `UPDATE browser_capture_tokens SET expires_at=now()-interval '1 second' WHERE token_hash=$1`,
+      [createHash('sha256').update(expired.token).digest('hex')],
+    );
+    await expect(ingestOwnerAssistedCapture(base(expired), database.pool)).rejects.toThrow(
+      'expired',
+    );
   });
 });

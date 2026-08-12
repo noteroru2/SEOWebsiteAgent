@@ -71,6 +71,13 @@
       "when": 1786536000000,
       "tag": "0009_evidence_automation",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786543200000,
+      "tag": "0010_owner_assisted_serp",
+      "breakpoints": true
     }
   ]
 }

@@ -25,6 +25,7 @@ import {
   discardSerpCaptureAction,
 } from '../../actions';
 import { EvidenceReevaluationControl } from './evidence-reevaluation-control';
+import { RealBrowserCaptureTool } from './real-browser-capture-tool';
 
 export const dynamic = 'force-dynamic';
 export default async function OpportunityDetailPage({
@@ -241,7 +242,7 @@ function EvidenceRequiredPanel({
               </p>
               {request.status === 'OPEN' && request.type === 'MANUAL_SERP_OBSERVATION' ? (
                 <>
-                  <h3>Browser SERP capture</h3>
+                  <h3>Automated Browser SERP capture</h3>
                   <p className="hint">
                     The query and target domain are fixed. Emulation is not a real-device
                     observation. Capture remains unconfirmed until owner review.
@@ -286,10 +287,20 @@ function EvidenceRequiredPanel({
                           <input name="longitude" type="number" step="any" />
                         </label>
                       </div>
-                      <button>Capture SERP</button>
+                      <button>Run Optional Automated Capture</button>
                     </form>
                   ) : null}
                 </>
+              ) : null}
+              {request.type === 'MANUAL_SERP_OBSERVATION' &&
+              (request.status === 'OPEN' || latestCapture?.status === 'CAPTURE_BLOCKED') ? (
+                <div id={`real-browser-capture-${request.id}`}>
+                  <RealBrowserCaptureTool
+                    opportunityId={opportunityId}
+                    requestId={request.id}
+                    query={query}
+                  />
+                </div>
               ) : null}
               {request.status === 'RESOLVED' &&
               request.type === 'MANUAL_SERP_OBSERVATION' &&
@@ -322,33 +333,59 @@ function EvidenceRequiredPanel({
               ) : null}
               {latestCapture?.status === 'CAPTURE_BLOCKED' ? (
                 <div className="notice danger-text">
-                  CAPTURE_BLOCKED. Google returned a challenge. Use the manual observation workflow.
+                  <p>Automated Google capture was blocked.</p>
+                  <p>Google challenged automated capture. Use Real Browser Capture instead.</p>
+                  <p>
+                    <a href={`#real-browser-capture-${request.id}`}>Use Real Browser Capture</a> ·{' '}
+                    <a href={`#manual-observation-${request.id}`}>Enter Observation Manually</a>
+                  </p>
                 </div>
               ) : null}
               {latestCapture?.status === 'CAPTURED' ? (
                 <section className="capture-review">
-                  <h3>SERP Capture · awaiting owner confirmation</h3>
+                  <h3>
+                    {machine.provenance === 'OWNER_ASSISTED_BROWSER_CAPTURE'
+                      ? 'OWNER-ASSISTED SERP CAPTURE'
+                      : 'SERP Capture'}{' '}
+                    · awaiting owner confirmation
+                  </h3>
+                  <p>
+                    <strong>Query:</strong> {String(latestCapture.query)}
+                  </p>
                   <p className="hint">
                     Captured {new Date(String(latestCapture.captured_at)).toLocaleString()} ·{' '}
-                    {String(latestCapture.timezone)} · {String(latestCapture.device_provenance)}
+                    {String(latestCapture.timezone)} ·{' '}
+                    {latestCapture.device_provenance === 'REAL_DESKTOP_BROWSER'
+                      ? 'Real Desktop'
+                      : latestCapture.device_provenance === 'REAL_MOBILE_BROWSER'
+                        ? 'Real Mobile'
+                        : String(latestCapture.device_provenance)}
                   </p>
                   <p>
-                    <strong>Requested location:</strong>{' '}
+                    <strong>Owner-declared location:</strong>{' '}
                     {String(latestCapture.requested_location_label)}
                   </p>
                   <p>
                     <strong>Google displayed location:</strong>{' '}
                     {String(latestCapture.google_displayed_location ?? 'UNKNOWN')}
                   </p>
+                  {latestCapture.screenshot_path ? (
+                    <p>
+                      <a
+                        href={`/api/serp-captures/${latestCapture.id}/screenshot`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        View screenshot
+                      </a>{' '}
+                      · SHA256 {String(latestCapture.screenshot_sha256).slice(0, 12)}…
+                    </p>
+                  ) : null}
                   <p>
-                    <a
-                      href={`/api/serp-captures/${latestCapture.id}/screenshot`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      View screenshot
-                    </a>{' '}
-                    · SHA256 {String(latestCapture.screenshot_sha256).slice(0, 12)}…
+                    <strong>AMPHON organic position:</strong>{' '}
+                    {machine.approximateOrganicPosition == null
+                      ? 'UNKNOWN'
+                      : String(machine.approximateOrganicPosition)}
                   </p>
                   {Array.isArray(machine.lowConfidenceFields) &&
                   machine.lowConfidenceFields.length ? (
@@ -356,6 +393,7 @@ function EvidenceRequiredPanel({
                       Low confidence: {machine.lowConfidenceFields.join(', ')}
                     </div>
                   ) : null}
+                  <h4>Correct Fields</h4>
                   <form
                     action={confirmSerpCaptureAction.bind(
                       null,
@@ -428,7 +466,7 @@ function EvidenceRequiredPanel({
                 </section>
               ) : null}
               {request.status === 'OPEN' && request.type === 'MANUAL_SERP_OBSERVATION' ? (
-                <details>
+                <details id={`manual-observation-${request.id}`}>
                   <summary>Use manual real-device observation instead</summary>
                   <form action={addSerpObservationAction.bind(null, opportunityId, request.id)}>
                     <input type="hidden" name="query" value={query} />

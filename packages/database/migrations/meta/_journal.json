@@ -57,6 +57,13 @@
       "when": 1786525200000,
       "tag": "0007_evidence_resolution",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786531200000,
+      "tag": "0008_owner_evidence_timezone",
+      "breakpoints": true
     }
   ]
 }

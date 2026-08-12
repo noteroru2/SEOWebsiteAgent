@@ -755,6 +755,7 @@ export const evidenceItems = pgTable(
     evidence: jsonb('evidence').notNull(),
     evidenceHash: text('evidence_hash').notNull(),
     observedAt: timestamp('observed_at', { withTimezone: true }),
+    observedTimezone: text('observed_timezone'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('evidence_item_request_idx').on(t.requestId, t.createdAt)],

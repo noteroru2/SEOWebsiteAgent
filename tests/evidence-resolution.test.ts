@@ -4,11 +4,13 @@ import {
   createDatabase,
   createSite,
   buildGscComparison,
+  correctOwnerEvidenceTimestamp,
   deterministicEvidencePacket,
   ensureEvidenceRequest,
   equalGscWindows,
   evidenceCompleteness,
   evidenceHash,
+  localDateTimeInTimeZoneToUtc,
   enqueueJob,
   evidencePanelForOpportunity,
   missingDatesForWindow,
@@ -87,6 +89,44 @@ describe('Batch 6.4 deterministic evidence resolution', () => {
       current: { start: '2026-07-12', end: '2026-08-08', days: 28 },
       previous: { start: '2026-06-14', end: '2026-07-11', days: 28 },
     }));
+  it('converts an Asia/Bangkok local observation to the correct UTC instant', () =>
+    expect(localDateTimeInTimeZoneToUtc('2026-08-12T15:59', 'Asia/Bangkok').toISOString()).toBe(
+      '2026-08-12T08:59:00.000Z',
+    ));
+  it('does not depend on the server or container process timezone', () => {
+    const original = process.env.TZ;
+    try {
+      process.env.TZ = 'UTC';
+      const utcHost = localDateTimeInTimeZoneToUtc(
+        '2026-08-12T15:59',
+        'Asia/Bangkok',
+      ).toISOString();
+      process.env.TZ = 'Pacific/Honolulu';
+      expect(localDateTimeInTimeZoneToUtc('2026-08-12T15:59', 'Asia/Bangkok').toISOString()).toBe(
+        utcHost,
+      );
+    } finally {
+      process.env.TZ = original;
+    }
+  });
+  it('uses daylight-saving-capable IANA timezone rules', () => {
+    expect(localDateTimeInTimeZoneToUtc('2026-01-15T12:00', 'America/New_York').toISOString()).toBe(
+      '2026-01-15T17:00:00.000Z',
+    );
+    expect(localDateTimeInTimeZoneToUtc('2026-07-15T12:00', 'America/New_York').toISOString()).toBe(
+      '2026-07-15T16:00:00.000Z',
+    );
+  });
+  it('rejects invalid, missing, ambiguous, and nonexistent timezone inputs', () => {
+    expect(() => localDateTimeInTimeZoneToUtc('2026-08-12T15:59', '')).toThrow();
+    expect(() => localDateTimeInTimeZoneToUtc('2026-08-12T15:59', 'Not/AZone')).toThrow();
+    expect(() => localDateTimeInTimeZoneToUtc('2026-11-01T01:30', 'America/New_York')).toThrow(
+      'Ambiguous',
+    );
+    expect(() => localDateTimeInTimeZoneToUtc('2026-03-08T02:30', 'America/New_York')).toThrow(
+      'Nonexistent',
+    );
+  });
   it('handles zero denominators safely', () =>
     expect(safeMetricDelta(4, 0)).toEqual({ absolute: 4, relative: null }));
   it('compares current and previous query-to-page distributions deterministically', async () => {
@@ -232,6 +272,100 @@ describe('Batch 6.4 deterministic evidence resolution', () => {
     ).toBe('RESOLVED');
     expect((await database.pool.query(`SELECT count(*)::int n FROM ai_usage`)).rows[0].n).toBe(0);
     expect((await database.pool.query(`SELECT count(*)::int n FROM jobs`)).rows[0].n).toBe(0);
+  });
+  it('hashes the actual observation instant and explicit timezone', async () => {
+    const request = await ensureEvidenceRequest(
+      {
+        opportunityId,
+        type: 'MANUAL_SERP_OBSERVATION',
+        requirement: 'Timestamp identity',
+        reason: 'Timestamp identity',
+        source: 'OWNER',
+      },
+      database.pool,
+    );
+    const evidence = { query: 'fixture', displayedTitle: 'Fixture' };
+    const first = await recordEvidenceItem(
+      request.id,
+      'OWNER_OBSERVED_SERP',
+      evidence,
+      new Date('2026-08-12T08:59:00Z'),
+      database.pool,
+      'Asia/Bangkok',
+    );
+    const second = await recordEvidenceItem(
+      request.id,
+      'OWNER_OBSERVED_SERP',
+      evidence,
+      new Date('2026-08-12T15:59:00Z'),
+      database.pool,
+      'Asia/Bangkok',
+    );
+    expect(first.evidence_hash).not.toBe(second.evidence_hash);
+  });
+  it('corrects historical owner evidence audibly, stales V3, and never queues AI', async () => {
+    const siteId = (
+      await database.pool.query(`SELECT site_id FROM opportunities WHERE id=$1`, [opportunityId])
+    ).rows[0].site_id;
+    const request = await ensureEvidenceRequest(
+      {
+        opportunityId,
+        type: 'MANUAL_SERP_OBSERVATION',
+        requirement: 'Historical timestamp',
+        reason: 'Historical timestamp',
+        source: 'OWNER',
+      },
+      database.pool,
+    );
+    const item = await database.pool.query(
+      `INSERT INTO evidence_items(request_id,source_type,evidence,evidence_hash,observed_at)
+       VALUES($1,'OWNER_OBSERVED_SERP','{"query":"fixture"}','legacy-hash','2026-08-12T15:59:00Z') RETURNING *`,
+      [request.id],
+    );
+    await database.pool.query(`UPDATE evidence_requests SET status='RESOLVED' WHERE id=$1`, [
+      request.id,
+    ]);
+    const repository = await database.pool.query(
+      `INSERT INTO site_repositories(site_id,local_path) VALUES($1,'C:/fixture') RETURNING id`,
+      [siteId],
+    );
+    const run = await database.pool.query(
+      `INSERT INTO source_plan_runs(site_id,opportunity_id,repository_id,status,model,reasoning_effort,prompt_version,schema_version,repository_head_sha,source_evidence_hash,finished_at)
+       VALUES($1,$2,$3,'SUCCEEDED','gpt-5.6-terra','medium','source-change-plan-prompt-v3','schema','head','old-source-hash',now()) RETURNING id`,
+      [siteId, opportunityId, repository.rows[0].id],
+    );
+    const plan = await database.pool.query(
+      `INSERT INTO source_change_plans(run_id,site_id,opportunity_id,verdict,confidence,batch5_reconciliation,summary,structured_output,status)
+       VALUES($1,$2,$3,'PROTECT_CURRENT_STATE','HIGH','REFINED','Historical','{}','READY_FOR_REVIEW') RETURNING id`,
+      [run.rows[0].id, siteId, opportunityId],
+    );
+    const correction = await correctOwnerEvidenceTimestamp(
+      {
+        itemId: item.rows[0].id,
+        expectedObservedAt: '2026-08-12T15:59:00Z',
+        localDateTime: '2026-08-12T15:59',
+        timeZone: 'Asia/Bangkok',
+      },
+      database.pool,
+    );
+    expect(correction.originalObservedAt).toBe('2026-08-12T15:59:00.000Z');
+    expect(correction.correctedObservedAt).toBe('2026-08-12T08:59:00.000Z');
+    expect(correction.originalEvidenceHash).toBe('legacy-hash');
+    expect(correction.correctedEvidenceHash).not.toBe('legacy-hash');
+    expect(correction.oldEvidencePacketHash).not.toBe(correction.newEvidencePacketHash);
+    expect(
+      (
+        await database.pool.query(`SELECT status FROM source_change_plans WHERE id=$1`, [
+          plan.rows[0].id,
+        ])
+      ).rows[0].status,
+    ).toBe('STALE');
+    const audit = await database.pool.query(
+      `SELECT detail FROM system_events WHERE event='OWNER_EVIDENCE_TIMESTAMP_CORRECTED'`,
+    );
+    expect(audit.rows[0].detail.originalObservedAt).toBe('2026-08-12T15:59:00.000Z');
+    expect((await database.pool.query(`SELECT count(*)::int n FROM jobs`)).rows[0].n).toBe(0);
+    expect((await database.pool.query(`SELECT count(*)::int n FROM ai_usage`)).rows[0].n).toBe(0);
   });
   it('rejects owner evidence whose provenance does not match the request type', async () => {
     const request = await ensureEvidenceRequest(

@@ -36,6 +36,126 @@ export function evidenceHash(value: unknown) {
   return createHash('sha256').update(stable(value)).digest('hex');
 }
 
+type LocalDateTime = {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+};
+
+function parseLocalDateTime(value: string): LocalDateTime {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value);
+  if (!match) throw new Error('Local observation date and time required without an offset');
+  const result = {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+    hour: Number(match[4]),
+    minute: Number(match[5]),
+    second: match[6] === undefined ? 0 : Number(match[6]),
+  };
+  const check = new Date(
+    Date.UTC(result.year, result.month - 1, result.day, result.hour, result.minute, result.second),
+  );
+  if (
+    check.getUTCFullYear() !== result.year ||
+    check.getUTCMonth() + 1 !== result.month ||
+    check.getUTCDate() !== result.day ||
+    result.hour > 23 ||
+    result.minute > 59 ||
+    result.second > 59
+  )
+    throw new Error('Valid local observation date and time required');
+  return result;
+}
+
+function zonedParts(formatter: Intl.DateTimeFormat, instant: number): LocalDateTime {
+  const parts = Object.fromEntries(
+    formatter
+      .formatToParts(new Date(instant))
+      .filter((part) => part.type !== 'literal')
+      .map((part) => [part.type, Number(part.value)]),
+  );
+  return {
+    year: parts.year!,
+    month: parts.month!,
+    day: parts.day!,
+    hour: parts.hour!,
+    minute: parts.minute!,
+    second: parts.second!,
+  };
+}
+
+function sameLocal(a: LocalDateTime, b: LocalDateTime) {
+  return Object.keys(a).every(
+    (key) => a[key as keyof LocalDateTime] === b[key as keyof LocalDateTime],
+  );
+}
+
+export function localDateTimeInTimeZoneToUtc(localDateTime: string, timeZone: string) {
+  if (!timeZone?.trim()) throw new Error('Explicit observation timezone required');
+  const local = parseLocalDateTime(localDateTime);
+  let formatter: Intl.DateTimeFormat;
+  try {
+    formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    });
+  } catch {
+    throw new Error('Valid IANA observation timezone required');
+  }
+  if (formatter.resolvedOptions().timeZone !== timeZone)
+    throw new Error('Canonical IANA observation timezone required');
+  const localAsUtc = Date.UTC(
+    local.year,
+    local.month - 1,
+    local.day,
+    local.hour,
+    local.minute,
+    local.second,
+  );
+  const offsets = new Set<number>();
+  for (let delta = -36 * 60; delta <= 36 * 60; delta += 30) {
+    const sample = localAsUtc + delta * 60_000;
+    const represented = zonedParts(formatter, sample);
+    offsets.add(
+      Date.UTC(
+        represented.year,
+        represented.month - 1,
+        represented.day,
+        represented.hour,
+        represented.minute,
+        represented.second,
+      ) -
+        Math.trunc(sample / 1000) * 1000,
+    );
+  }
+  const matches = [...offsets]
+    .map((offset) => localAsUtc - offset)
+    .filter((instant) => sameLocal(zonedParts(formatter, instant), local));
+  if (matches.length !== 1)
+    throw new Error(
+      matches.length ? 'Ambiguous local observation time' : 'Nonexistent local observation time',
+    );
+  return new Date(matches[0]!);
+}
+
+function evidenceItemIdentity(evidence: unknown, observedAt?: Date, observedTimezone?: string) {
+  return evidenceHash({
+    evidence,
+    observedAt: observedAt?.toISOString() ?? null,
+    observedTimezone: observedTimezone ?? null,
+  });
+}
+
 export function equalGscWindows(lastFinalizedDate: string, days = 28) {
   const currentEnd = lastFinalizedDate;
   const currentStart = addCalendarDays(currentEnd, -(days - 1));
@@ -121,8 +241,16 @@ export async function resolveEvidenceRequest(
   evidence: unknown,
   observedAt?: Date,
   pool: Pool = getDatabase().pool,
+  observedTimezone?: string,
 ) {
-  const item = await recordEvidenceItem(requestId, sourceType, evidence, observedAt, pool);
+  const item = await recordEvidenceItem(
+    requestId,
+    sourceType,
+    evidence,
+    observedAt,
+    pool,
+    observedTimezone,
+  );
   await pool.query(`UPDATE evidence_requests SET status='RESOLVED',updated_at=now() WHERE id=$1`, [
     requestId,
   ]);
@@ -135,15 +263,31 @@ export async function recordEvidenceItem(
   evidence: unknown,
   observedAt?: Date,
   pool: Pool = getDatabase().pool,
+  observedTimezone?: string,
 ) {
-  const hash = evidenceHash(evidence);
+  if (observedAt && !observedTimezone)
+    throw new Error('Observation timezone required when observation time is supplied');
+  const hash = evidenceItemIdentity(evidence, observedAt, observedTimezone);
   const item = await pool.query(
-    `INSERT INTO evidence_items(request_id,source_type,evidence,evidence_hash,observed_at)
-     VALUES($1,$2,$3::jsonb,$4,$5) ON CONFLICT(request_id,evidence_hash) DO UPDATE SET observed_at=excluded.observed_at
+    `INSERT INTO evidence_items(request_id,source_type,evidence,evidence_hash,observed_at,observed_timezone)
+     VALUES($1,$2,$3::jsonb,$4,$5,$6) ON CONFLICT(request_id,evidence_hash) DO NOTHING
      RETURNING *`,
-    [requestId, sourceType, JSON.stringify(evidence), hash, observedAt ?? null],
+    [
+      requestId,
+      sourceType,
+      JSON.stringify(evidence),
+      hash,
+      observedAt ?? null,
+      observedTimezone ?? null,
+    ],
   );
-  return item.rows[0];
+  if (item.rows[0]) return item.rows[0];
+  return (
+    await pool.query(
+      `SELECT * FROM evidence_items WHERE request_id=$1 AND evidence_hash=$2 LIMIT 1`,
+      [requestId, hash],
+    )
+  ).rows[0];
 }
 
 export async function storeOwnerEvidence(
@@ -152,6 +296,7 @@ export async function storeOwnerEvidence(
     sourceType: 'OWNER_OBSERVED_SERP' | 'OWNER_CONFIRMED';
     evidence: unknown;
     observedAt?: Date;
+    observedTimezone?: string;
   },
   pool: Pool = getDatabase().pool,
 ) {
@@ -172,6 +317,7 @@ export async function storeOwnerEvidence(
     input.evidence,
     input.observedAt,
     pool,
+    input.observedTimezone,
   );
 }
 
@@ -371,7 +517,7 @@ export async function evidencePanelForOpportunity(
 ) {
   const result = await pool.query(
     `SELECT r.*,coalesce(jsonb_agg(jsonb_build_object('id',i.id,'sourceType',i.source_type,'evidence',i.evidence,
-      'evidenceHash',i.evidence_hash,'observedAt',i.observed_at,'createdAt',i.created_at)
+      'evidenceHash',i.evidence_hash,'observedAt',i.observed_at,'observedTimezone',i.observed_timezone,'createdAt',i.created_at)
       ORDER BY i.created_at,i.id) FILTER(WHERE i.id IS NOT NULL),'[]') items
      FROM evidence_requests r LEFT JOIN evidence_items i ON i.request_id=r.id
      WHERE r.opportunity_id=$1 AND r.status<>'SUPERSEDED' GROUP BY r.id ORDER BY r.created_at`,
@@ -433,7 +579,11 @@ export async function deterministicEvidencePacket(
     previousGscWindow: byType('GSC_COMPARISON_WINDOW').map((item) => item.evidence.previous),
     queryPageDistribution: byType('GSC_QUERY_PAGE_DISTRIBUTION').map((item) => item.evidence),
     targetedSourceContext: byType('TARGETED_SOURCE_CONTEXT').map((item) => item.evidence),
-    manualSerpObservation: byType('MANUAL_SERP_OBSERVATION').map((item) => item.evidence),
+    manualSerpObservation: byType('MANUAL_SERP_OBSERVATION').map((item) => ({
+      ...item.evidence,
+      observedAt: item.observedAt ? new Date(item.observedAt).toISOString() : null,
+      observedTimezone: item.observedTimezone ?? null,
+    })),
     ownerBusinessConfirmation: byType('OWNER_BUSINESS_CONFIRMATION').map((item) => item.evidence),
     ownerQueryOwnership: byType('OWNER_QUERY_OWNERSHIP').map((item) => item.evidence),
     unresolvedEvidence: panel.requests
@@ -441,6 +591,83 @@ export async function deterministicEvidencePacket(
       .map((request) => ({ type: request.type, requirement: request.requirement })),
   };
   return { packet, evidencePacketHash: evidenceHash(packet), completeness: panel.completeness };
+}
+
+export async function correctOwnerEvidenceTimestamp(
+  input: {
+    itemId: string;
+    expectedObservedAt: string;
+    localDateTime: string;
+    timeZone: string;
+  },
+  pool: Pool = getDatabase().pool,
+) {
+  const corrected = localDateTimeInTimeZoneToUtc(input.localDateTime, input.timeZone);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const selected = await client.query(
+      `SELECT i.*,r.opportunity_id,r.type request_type
+       FROM evidence_items i JOIN evidence_requests r ON r.id=i.request_id
+       WHERE i.id=$1 FOR UPDATE OF i,r`,
+      [input.itemId],
+    );
+    const item = selected.rows[0];
+    if (
+      !item ||
+      item.source_type !== 'OWNER_OBSERVED_SERP' ||
+      item.request_type !== 'MANUAL_SERP_OBSERVATION'
+    )
+      throw new Error('Manual owner-observed SERP evidence item required');
+    const originalObservedAt = item.observed_at ? new Date(item.observed_at).toISOString() : null;
+    if (originalObservedAt !== new Date(input.expectedObservedAt).toISOString())
+      throw new Error('Original observation timestamp does not match correction provenance');
+    const oldPacket = await deterministicEvidencePacket(
+      String(item.opportunity_id),
+      client as unknown as Pool,
+    );
+    const correctedHash = evidenceItemIdentity(item.evidence, corrected, input.timeZone);
+    await client.query(
+      `UPDATE evidence_items SET observed_at=$2,observed_timezone=$3,evidence_hash=$4 WHERE id=$1`,
+      [input.itemId, corrected, input.timeZone, correctedHash],
+    );
+    const newPacket = await deterministicEvidencePacket(
+      String(item.opportunity_id),
+      client as unknown as Pool,
+    );
+    const stale = await client.query(
+      `UPDATE source_change_plans p SET status='STALE',stale_at=now(),updated_at=now()
+       FROM source_plan_runs r WHERE p.run_id=r.id AND r.opportunity_id=$1
+         AND r.prompt_version='source-change-plan-prompt-v3'
+         AND p.status IN ('READY_FOR_REVIEW','APPROVED') RETURNING p.id`,
+      [item.opportunity_id],
+    );
+    const detail = {
+      opportunityId: item.opportunity_id,
+      evidenceItemId: item.id,
+      originalObservedAt,
+      originalObservedTimezone: item.observed_timezone,
+      originalEvidenceHash: item.evidence_hash,
+      correctedObservedAt: corrected.toISOString(),
+      correctedObservedTimezone: input.timeZone,
+      correctedEvidenceHash: correctedHash,
+      oldEvidencePacketHash: oldPacket.evidencePacketHash,
+      newEvidencePacketHash: newPacket.evidencePacketHash,
+      stalePlanIds: stale.rows.map((row) => row.id),
+    };
+    await client.query(
+      `INSERT INTO system_events(source,level,event,detail)
+       VALUES('owner-evidence','INFO','OWNER_EVIDENCE_TIMESTAMP_CORRECTED',$1::jsonb)`,
+      [JSON.stringify(detail)],
+    );
+    await client.query('COMMIT');
+    return detail;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 const sixEvidenceTargets = [

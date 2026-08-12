@@ -13,6 +13,7 @@ import {
   deterministicEvidencePacket,
   evidenceReevaluationStateForOpportunity,
   resolveInternalEvidenceForSix,
+  localDateTimeInTimeZoneToUtc,
 } from '@seo-agent/database';
 import { inspectRepository } from '@seo-agent/source-understanding';
 import { createSiteSchema } from '@seo-agent/shared';
@@ -233,8 +234,9 @@ export async function addSerpObservationAction(
     if (!value) throw new Error(`${name} is required`);
     return value;
   };
-  const observedAt = new Date(String(formData.get('observedAt') ?? ''));
-  if (Number.isNaN(observedAt.getTime())) throw new Error('Valid observation date required');
+  const observedLocalDateTime = required('observedAt');
+  const observedTimezone = required('observedTimezone');
+  const observedAt = localDateTimeInTimeZoneToUtc(observedLocalDateTime, observedTimezone);
   const rankingUrl = new URL(required('rankingUrl'));
   if (!['http:', 'https:'].includes(rankingUrl.protocol))
     throw new Error('Ranking URL must use HTTP or HTTPS');
@@ -250,6 +252,7 @@ export async function addSerpObservationAction(
     requestId,
     sourceType: 'OWNER_OBSERVED_SERP',
     observedAt,
+    observedTimezone,
     evidence: {
       query: required('query'),
       location: required('location'),

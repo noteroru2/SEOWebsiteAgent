@@ -324,6 +324,8 @@ describe('server-rendered UI foundations', () => {
     expect(detail).toContain('HUMAN REVIEW REQUIRED');
     expect(detail).toContain('EVIDENCE REQUIRED');
     expect(detail).toContain('Add SERP Observation');
+    expect(detail).toContain('Timezone');
+    expect(detail).toContain('Asia/Bangkok');
     expect(detail).not.toContain('OPENAI_API_KEY=');
   });
   it('shows a disabled queued state and worker warning for an active evidence re-evaluation', async () => {

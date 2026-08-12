@@ -225,7 +225,14 @@ function EvidenceRequiredPanel({
             {request.status === 'OPEN' && request.type === 'MANUAL_SERP_OBSERVATION' ? (
               <form action={addSerpObservationAction.bind(null, opportunityId, request.id)}>
                 <input type="hidden" name="query" value={query} />
-                <input name="observedAt" type="datetime-local" required />
+                <label>
+                  Observed at
+                  <input name="observedAt" type="datetime-local" required />
+                </label>
+                <label>
+                  Timezone
+                  <input name="observedTimezone" value="Asia/Bangkok" readOnly required />
+                </label>
                 <input name="location" placeholder="Location" required />
                 <input name="device" placeholder="Device" required />
                 <input name="displayedTitle" placeholder="Displayed title" required />

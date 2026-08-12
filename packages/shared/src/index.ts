@@ -98,6 +98,8 @@ export const jobTypes = [
   'GSC_SYNC',
   'GENERATE_OPPORTUNITIES',
   'ANALYZE_OPPORTUNITY',
+  'REFRESH_SOURCE_REPOSITORY',
+  'GENERATE_SOURCE_CHANGE_PLAN',
 ] as const;
 export type JobType = (typeof jobTypes)[number];
 
@@ -127,7 +129,12 @@ export const enqueueJobSchema = z
     reanalyze: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {
-    if (['SITE_CRAWL', 'GSC_SYNC', 'GENERATE_OPPORTUNITIES'].includes(value.type) && !value.siteId)
+    if (
+      ['SITE_CRAWL', 'GSC_SYNC', 'GENERATE_OPPORTUNITIES', 'REFRESH_SOURCE_REPOSITORY'].includes(
+        value.type,
+      ) &&
+      !value.siteId
+    )
       ctx.addIssue({
         code: 'custom',
         path: ['siteId'],
@@ -138,6 +145,12 @@ export const enqueueJobSchema = z
         code: 'custom',
         path: ['opportunityId'],
         message: 'ANALYZE_OPPORTUNITY requires siteId and opportunityId',
+      });
+    if (value.type === 'GENERATE_SOURCE_CHANGE_PLAN' && (!value.siteId || !value.opportunityId))
+      ctx.addIssue({
+        code: 'custom',
+        path: ['opportunityId'],
+        message: 'GENERATE_SOURCE_CHANGE_PLAN requires siteId and opportunityId',
       });
   });
 

@@ -9,6 +9,7 @@ import * as schema from './schema';
 export * from './schema';
 export * from './opportunities';
 export * from './ai-recommendations';
+export * from './source-plans';
 export type Database = ReturnType<typeof drizzle<typeof schema>>;
 let singleton: { pool: Pool; db: Database } | undefined;
 
@@ -34,26 +35,32 @@ export async function createSite(input: unknown, database = getDatabase().db) {
 
 export async function enqueueJob(input: unknown, database = getDatabase().db) {
   const value = enqueueJobSchema.parse(input);
-  const deduplicatedTypes = ['GSC_SYNC', 'GENERATE_OPPORTUNITIES', 'ANALYZE_OPPORTUNITY'];
+  const deduplicatedTypes = [
+    'GSC_SYNC',
+    'GENERATE_OPPORTUNITIES',
+    'ANALYZE_OPPORTUNITY',
+    'REFRESH_SOURCE_REPOSITORY',
+    'GENERATE_SOURCE_CHANGE_PLAN',
+  ];
   const insert = database.insert(schema.jobs).values({
     type: value.type,
     siteId: value.siteId,
     heavy: !deduplicatedTypes.includes(value.type),
-    payload:
-      value.type === 'ANALYZE_OPPORTUNITY'
-        ? { opportunityId: value.opportunityId, reanalyze: value.reanalyze === true }
-        : value.mode
-          ? { mode: value.mode }
-          : {},
+    payload: ['ANALYZE_OPPORTUNITY', 'GENERATE_SOURCE_CHANGE_PLAN'].includes(value.type)
+      ? { opportunityId: value.opportunityId, reanalyze: value.reanalyze === true }
+      : value.mode
+        ? { mode: value.mode }
+        : {},
   });
   const [job] = deduplicatedTypes.includes(value.type)
     ? await insert.onConflictDoNothing().returning()
     : await insert.returning();
   if (!job && deduplicatedTypes.includes(value.type) && value.siteId) {
-    const opportunityCondition =
-      value.type === 'ANALYZE_OPPORTUNITY'
-        ? sql`${schema.jobs.payload}->>'opportunityId' = ${value.opportunityId}`
-        : undefined;
+    const opportunityCondition = ['ANALYZE_OPPORTUNITY', 'GENERATE_SOURCE_CHANGE_PLAN'].includes(
+      value.type,
+    )
+      ? sql`${schema.jobs.payload}->>'opportunityId' = ${value.opportunityId}`
+      : undefined;
     const [active] = await database
       .select()
       .from(schema.jobs)
@@ -531,6 +538,8 @@ export const registeredJobTypes: ReadonlySet<JobType> = new Set([
   'GSC_SYNC',
   'GENERATE_OPPORTUNITIES',
   'ANALYZE_OPPORTUNITY',
+  'REFRESH_SOURCE_REPOSITORY',
+  'GENERATE_SOURCE_CHANGE_PLAN',
 ]);
 
 export async function createGscOAuthState(

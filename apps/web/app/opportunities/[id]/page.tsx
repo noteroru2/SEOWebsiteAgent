@@ -1,7 +1,11 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { aiPanelForOpportunity, opportunityDetail } from '@seo-agent/database';
-import { dismissOpportunityAction, enqueueAiAnalysis } from '../../actions';
+import {
+  aiPanelForOpportunity,
+  opportunityDetail,
+  sourcePanelForOpportunity,
+} from '@seo-agent/database';
+import { dismissOpportunityAction, enqueueAiAnalysis, enqueueSourcePlan } from '../../actions';
 
 export const dynamic = 'force-dynamic';
 export default async function OpportunityDetailPage({
@@ -10,7 +14,11 @@ export default async function OpportunityDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [data, ai] = await Promise.all([opportunityDetail(id), aiPanelForOpportunity(id)]);
+  const [data, ai, source] = await Promise.all([
+    opportunityDetail(id),
+    aiPanelForOpportunity(id),
+    sourcePanelForOpportunity(id),
+  ]);
   if (!data) notFound();
   const item = data.opportunity;
   const evidence = item.evidence as Record<string, unknown>;
@@ -66,6 +74,7 @@ export default async function OpportunityDetailPage({
         </p>
       </section>
       <AiRecommendationPanel ai={ai} item={item} />
+      <SourceUnderstandingPanel source={source} item={item} />
       <div className="grid section">
         <section className="panel">
           <h2>Structured evidence</h2>
@@ -99,6 +108,91 @@ export default async function OpportunityDetailPage({
       </p>
       <div className="timing">Query {data.timingMs.toFixed(1)} ms</div>
     </>
+  );
+}
+
+function SourceUnderstandingPanel({
+  source,
+  item,
+}: {
+  source: Awaited<ReturnType<typeof sourcePanelForOpportunity>>;
+  item: Record<string, unknown>;
+}) {
+  const plan = source.latest;
+  const output = (plan?.structured_output ?? {}) as Record<string, unknown>;
+  const findings = Array.isArray(output.source_findings)
+    ? (output.source_findings as Array<Record<string, unknown>>)
+    : [];
+  const changes = Array.isArray(output.change_items)
+    ? (output.change_items as Array<Record<string, unknown>>)
+    : [];
+  return (
+    <section className="panel section">
+      <div className="heading small">
+        <div>
+          <div className="eyebrow">Read-only evidence</div>
+          <h2>Source Understanding</h2>
+          <p className="hint">
+            Mapping: {String(source.mapping?.route_path ?? 'Not mapped')} →{' '}
+            {String(source.mapping?.primary_source_path ?? 'Source mapping required')} · HEAD{' '}
+            {String(source.mapping?.head_sha ?? '—').slice(0, 8)} · Status{' '}
+            {String(source.mapping?.mapping_status ?? 'NOT_REFRESHED')}
+          </p>
+        </div>
+        {source.mapping && !source.activeJob ? (
+          <form action={enqueueSourcePlan.bind(null, String(item.id), String(item.site_id))}>
+            <button
+              disabled={!source.configured || !['OPEN', 'MONITOR'].includes(String(item.status))}
+            >
+              Generate Source Plan
+            </button>
+          </form>
+        ) : source.activeJob ? (
+          <button disabled>{source.activeJob.status}</button>
+        ) : null}
+      </div>
+      {!plan ? (
+        <div className="empty compact-empty">No source-aware change plan has been generated.</div>
+      ) : (
+        <>
+          <div className="stats four">
+            <Stat label="Verdict" value={plan.verdict} />
+            <Stat label="Confidence" value={plan.confidence} />
+            <Stat label="Batch 5" value={plan.batch5_reconciliation} />
+            <Stat label="Status" value={plan.status} />
+          </div>
+          <p>{plan.summary}</p>
+          <h2>Source findings</h2>
+          {findings.map((finding, index) => (
+            <p key={index}>
+              <strong>
+                {String(finding.path)} lines {String(finding.start_line)}–{String(finding.end_line)}
+                :
+              </strong>{' '}
+              {String(finding.finding)}
+            </p>
+          ))}
+          <h2>Change plan</h2>
+          {changes.map((change, index) => (
+            <article key={index} className="panel compact section">
+              <strong>
+                {String(change.change_type)} · {String(change.path)} lines{' '}
+                {String(change.start_line)}–{String(change.end_line)}
+              </strong>
+              <p>{String(change.proposed_change)}</p>
+              <p className="hint">
+                Current: {String(change.current_state)} · Reason: {String(change.reason)} · Risk:{' '}
+                {String(change.risk)}
+              </p>
+            </article>
+          ))}
+          <p className="hint">
+            Approval records intent only and never writes to the source repository or website. Cost
+            ${(Number(plan.actual_cost_micros ?? 0) / 1_000_000).toFixed(4)}
+          </p>
+        </>
+      )}
+    </section>
   );
 }
 

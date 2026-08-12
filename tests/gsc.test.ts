@@ -25,7 +25,10 @@ describe('Google Search Console security and metrics', () => {
     expect(one).not.toContain('refresh-secret');
     expect(one).not.toBe(two);
     expect(decryptSecret(one, key)).toBe('refresh-secret');
-    expect(() => decryptSecret(`${one.slice(0, -1)}x`, key)).toThrow();
+    const corrupted = Buffer.from(one, 'base64');
+    const corruptionIndex = corrupted.length - 2;
+    corrupted[corruptionIndex] = corrupted[corruptionIndex]! ^ 0x01;
+    expect(() => decryptSecret(corrupted.toString('base64'), key)).toThrow();
     const previous = process.env.APP_ENCRYPTION_KEY;
     delete process.env.APP_ENCRYPTION_KEY;
     expect(() => encryptSecret('x')).toThrow(/APP_ENCRYPTION_KEY/);

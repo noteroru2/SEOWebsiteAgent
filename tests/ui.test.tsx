@@ -3,6 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { gscSiteView, mapGscProperty } from '@seo-agent/database';
 
 vi.mock('@seo-agent/database', () => ({
+  siteSourceSummary: vi.fn(async () => null),
+  sourcePanelForOpportunity: vi.fn(async () => ({
+    configured: true,
+    activeJob: null,
+    mapping: null,
+    latest: null,
+  })),
+  listSourceApprovals: vi.fn(async () => ({ rows: [], timingMs: 1 })),
+  connectSourceRepository: vi.fn(),
+  decideSourcePlan: vi.fn(),
   aiSpendSummary: vi.fn(async () => ({
     analyses: 1,
     provider_calls: 1,

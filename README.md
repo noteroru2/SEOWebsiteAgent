@@ -13,6 +13,7 @@ Local-first foundation for a safe SEO operator. Batch 5 adds a bounded, manual A
 - `packages/gsc`: OAuth security, encrypted credentials, Google REST adapter, bounded pagination, and metric aggregation.
 - `packages/opportunity-engine`: deterministic signal rules, scoring, stable fingerprints, suppression, and caps.
 - `packages/ai`: strict recommendation schema, bounded prompt/context contract, pricing, hashing, and the Responses API adapter.
+- `packages/source-understanding`: fail-closed local-repository validation, read-only Git, deterministic route mapping, bounded source context, and strict source-plan validation.
 
 PostgreSQL is both the system of record and queue. Claiming uses a transaction, row locking and an advisory lock. A partial unique index enforces at most one heavy `RUNNING` job even with multiple worker processes. Jobs record attempts, timestamps, failures, heartbeats and immutable events. Stale work is returned to `QUEUED` without erasing its attempt count.
 
@@ -61,10 +62,12 @@ Migrations are ordered SQL files in `packages/database/migrations` and applied t
 
 Opportunity generation methodology is documented in [docs/opportunity-engine.md](docs/opportunity-engine.md). The AI execution boundary, context, schema, budgets, reuse, provider safety, and pilot gate are documented in [docs/ai-recommendation-layer.md](docs/ai-recommendation-layer.md).
 
+Batch 6 source safety and planning are documented in [docs/source-repository-understanding.md](docs/source-repository-understanding.md) and [docs/source-change-plans.md](docs/source-change-plans.md).
+
 ## Resource model
 
 The eventual host is a Hetzner CX23 (2 vCPU, 4 GB RAM, 40 GB disk) shared with an existing application. The SEO stack must not assume all host resources belong to it. Default container ceilings total 1.25 GB: PostgreSQL 512 MB, web 512 MB and worker 256 MB. The idle worker sleeps between queue checks; only one heavy job runs. See [docs/resource-model.md](docs/resource-model.md).
 
 ## Batch boundary
 
-Production deployment is explicitly **not part of Batch 5**. No deployment, Hetzner connection, Git push, automatic fix, content generation, publishing, managed-site repository modification, or Batch 6 work is implemented. Provider calls are manual, single-opportunity, budget-gated, and owner-reviewed.
+Production deployment is explicitly **not part of Batch 6**. Source access is read-only and fail-closed. No patch, automatic fix, content publishing, managed-site repository modification, Git push, or Batch 7 execution is implemented. Provider calls are manual, single-opportunity, budget-gated, and owner-reviewed.

@@ -7,7 +7,10 @@ import {
   disconnectGsc,
   dismissOpportunity,
   aiPanelForOpportunity,
+  connectSourceRepository,
+  decideSourcePlan,
 } from '@seo-agent/database';
+import { inspectRepository } from '@seo-agent/source-understanding';
 import { createSiteSchema } from '@seo-agent/shared';
 import { assertSafeTarget } from '@seo-agent/crawler';
 import { revalidatePath } from 'next/cache';
@@ -98,4 +101,39 @@ export async function enqueueAiAnalysis(opportunityId: string, siteId: string, r
   revalidatePath(`/opportunities/${opportunityId}`);
   revalidatePath(`/sites/${siteId}`);
   revalidatePath('/jobs');
+}
+
+export async function connectSourceRepositoryAction(siteId: string, formData: FormData) {
+  if (!/^[0-9a-f-]{36}$/i.test(siteId)) throw new Error('Invalid site');
+  const state = await inspectRepository(String(formData.get('localRoot') ?? '').trim());
+  if (!state.clean) throw new Error('Source repository worktree must be clean');
+  await connectSourceRepository({
+    siteId,
+    localRoot: state.root,
+    expectedRemote: state.originUrl ?? undefined,
+    defaultBranch: state.branch ?? undefined,
+  });
+  await enqueueJob({ type: 'REFRESH_SOURCE_REPOSITORY', siteId });
+  revalidatePath(`/sites/${siteId}`);
+  revalidatePath('/jobs');
+}
+
+export async function enqueueSourceRefresh(siteId: string) {
+  await enqueueJob({ type: 'REFRESH_SOURCE_REPOSITORY', siteId });
+  revalidatePath(`/sites/${siteId}`);
+  revalidatePath('/jobs');
+}
+
+export async function enqueueSourcePlan(opportunityId: string, siteId: string) {
+  if (!/^[0-9a-f-]{36}$/i.test(opportunityId) || !/^[0-9a-f-]{36}$/i.test(siteId))
+    throw new Error('Invalid opportunity');
+  await enqueueJob({ type: 'GENERATE_SOURCE_CHANGE_PLAN', siteId, opportunityId });
+  revalidatePath(`/opportunities/${opportunityId}`);
+  revalidatePath('/jobs');
+}
+
+export async function decideSourcePlanAction(planId: string, decision: 'APPROVED' | 'REJECTED') {
+  if (!/^[0-9a-f-]{36}$/i.test(planId)) throw new Error('Invalid source plan');
+  await decideSourcePlan(planId, decision);
+  revalidatePath('/approvals');
 }

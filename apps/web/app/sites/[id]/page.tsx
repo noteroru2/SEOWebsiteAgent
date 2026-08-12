@@ -5,9 +5,16 @@ import {
   gscSiteStatus,
   siteDetail,
   siteOpportunitySummary,
+  siteSourceSummary,
 } from '@seo-agent/database';
 import { displayUtcTimestamp } from '@seo-agent/shared';
-import { cancelCrawl, enqueueOpportunityGeneration, enqueueSiteCrawl } from '../../actions';
+import {
+  cancelCrawl,
+  connectSourceRepositoryAction,
+  enqueueOpportunityGeneration,
+  enqueueSiteCrawl,
+  enqueueSourceRefresh,
+} from '../../actions';
 
 export const dynamic = 'force-dynamic';
 export default async function SitePage({
@@ -19,11 +26,12 @@ export default async function SitePage({
 }) {
   const { id } = await params;
   const filters = await searchParams;
-  const [data, gsc, opportunities, aiSpend] = await Promise.all([
+  const [data, gsc, opportunities, aiSpend, source] = await Promise.all([
     siteDetail(id, filters),
     gscSiteStatus(id),
     siteOpportunitySummary(id),
     aiSpendSummary(id),
+    siteSourceSummary(id),
   ]);
   if (!data) notFound();
   const summary = (data.latest?.summary ?? {}) as Record<string, unknown>;
@@ -51,6 +59,42 @@ export default async function SitePage({
         <Stat label="Indexable" value={data.latest?.pagesIndexable ?? 0} />
         <Stat label="Issues" value={data.latest?.issuesFound ?? 0} />
       </div>
+      <section className="panel compact section">
+        <div className="heading small">
+          <div>
+            <h2>Source Repository</h2>
+            {source ? (
+              <p className="hint">
+                Connected · {source.local_path} · HEAD{' '}
+                {String(source.head_sha ?? 'Not refreshed').slice(0, 8)} · Branch{' '}
+                {source.current_branch ?? '—'} · Worktree{' '}
+                {source.worktree_clean === true
+                  ? 'Clean'
+                  : source.worktree_clean === false
+                    ? 'Dirty'
+                    : 'Not checked'}{' '}
+                · Routes {source.routes_mapped ?? 0} · Unresolved {source.unresolved_routes ?? 0}
+              </p>
+            ) : (
+              <p className="hint">
+                Not connected. Enter one explicit local Git root; filesystem browsing is
+                unavailable.
+              </p>
+            )}
+          </div>
+          {source ? (
+            <form action={enqueueSourceRefresh.bind(null, id)}>
+              <button>Refresh Source</button>
+            </form>
+          ) : null}
+        </div>
+        {!source ? (
+          <form className="filters" action={connectSourceRepositoryAction.bind(null, id)}>
+            <input name="localRoot" required placeholder="Absolute local repository root" />
+            <button>Connect Source Repository</button>
+          </form>
+        ) : null}
+      </section>
       <section className="panel compact section">
         <div className="heading small">
           <div>

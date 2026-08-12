@@ -2,6 +2,8 @@
 
 The pilot is a small npm-workspaces monorepo with three runtime processes: Next.js web, PostgreSQL, and one TypeScript worker. PostgreSQL is both system of record and persistent queue, avoiding Redis or another service.
 
+Batch 6 adds two manual worker jobs: `REFRESH_SOURCE_REPOSITORY` validates a local Git repository and persists deterministic route metadata; `GENERATE_SOURCE_CHANGE_PLAN` builds one bounded source context and persists one validated plan. Web rendering reads PostgreSQL only and never scans repositories. See [source repository understanding](source-repository-understanding.md) and [source change plans](source-change-plans.md).
+
 Automated database tests use a separately created and migrated `seo_agent_test` database in the
 same PostgreSQL instance. Destructive test reset is fail-closed behind explicit environment,
 database-name, live-connection, and marker checks; it cannot fall back to the development database.

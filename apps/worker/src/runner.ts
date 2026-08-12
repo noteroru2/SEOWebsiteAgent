@@ -29,6 +29,12 @@ import {
   persistAiAnalysisSuccess,
   persistAiAnalysisFailure,
   recordAiFailedRequest,
+  sourceRepositoryForSite,
+  persistSourceRefresh,
+  opportunitySourceInput,
+  createSourcePlanRun,
+  persistSourcePlanSuccess,
+  failSourcePlanRun,
   type Database,
 } from '@seo-agent/database';
 import { resourceGuardFromEnv, type ResourceGuard } from '@seo-agent/resource-guard';
@@ -45,6 +51,15 @@ import type { Pool } from 'pg';
 import { generateOpportunitySet } from '@seo-agent/opportunity-engine';
 import { aiConfigFromEnv, OpenAiResponsesProvider, type ReasoningProvider } from '@seo-agent/ai';
 import {
+  OpenAiSourcePlanProvider,
+  buildSourceContext,
+  deriveAstroProjectMappings,
+  inspectRepository,
+  type RouteMapping,
+  type SourceContext,
+  type SourcePlanProvider,
+} from '@seo-agent/source-understanding';
+import {
   decryptSecret,
   encryptSecret,
   fetchDatasetPages,
@@ -60,6 +75,7 @@ export async function executeOne(
   guard: ResourceGuard = resourceGuardFromEnv(),
   gscApiOverride?: SearchConsoleApi,
   aiProviderOverride?: ReasoningProvider,
+  sourcePlanProviderOverride?: SourcePlanProvider,
 ) {
   const resource = await guard.evaluate();
   if (!resource.allowed) return { state: 'RESOURCE_DENIED' as const, resource };
@@ -82,6 +98,182 @@ export async function executeOne(
         pool,
       );
       return { state: 'SUCCEEDED' as const, job: completed };
+    }
+    if (type === 'REFRESH_SOURCE_REPOSITORY') {
+      const siteId = String(job.site_id ?? '');
+      const [site, repository] = await Promise.all([
+        getSite(siteId, database),
+        sourceRepositoryForSite(siteId, pool),
+      ]);
+      if (!site || !repository)
+        throw Object.assign(new Error('Source repository configuration required'), {
+          code: 'SOURCE_REPOSITORY_NOT_CONFIGURED',
+        });
+      await recordJobEvent(
+        id,
+        'SOURCE_REPOSITORY_REFRESH_STARTED',
+        { siteId, repositoryId: repository.id },
+        database,
+      );
+      const started = performance.now();
+      const state = await inspectRepository(String(repository.local_path));
+      if (repository.expected_remote && state.originUrl !== repository.expected_remote)
+        throw Object.assign(new Error('Source repository remote does not match configuration'), {
+          code: 'SOURCE_REMOTE_MISMATCH',
+        });
+      if (repository.default_branch && state.branch !== repository.default_branch)
+        throw Object.assign(new Error('Source repository branch does not match configuration'), {
+          code: 'SOURCE_BRANCH_MISMATCH',
+        });
+      const mappings = await deriveAstroProjectMappings(state);
+      const result = await persistSourceRefresh(
+        {
+          siteId,
+          repositoryId: String(repository.id),
+          siteUrl: site.url,
+          state,
+          mappings,
+          durationMs: Math.round(performance.now() - started),
+        },
+        pool,
+      );
+      await recordJobEvent(id, 'SOURCE_MAPPING_UPDATED', result, database);
+      return { state: 'SUCCEEDED' as const, job: await markJobSucceeded(id, result, pool) };
+    }
+    if (type === 'GENERATE_SOURCE_CHANGE_PLAN') {
+      const payload = (job.payload ?? {}) as { opportunityId?: string };
+      if (!payload.opportunityId)
+        throw Object.assign(new Error('Opportunity id is required'), {
+          code: 'OPPORTUNITY_REQUIRED',
+        });
+      let runId: string | undefined;
+      try {
+        const source = await opportunitySourceInput(payload.opportunityId, pool);
+        const deterministic = source.mappings.filter(
+          (item) => !['UNRESOLVED', 'AMBIGUOUS'].includes(String(item.mapping_status)),
+        );
+        if (!deterministic.length || deterministic.length !== source.routes.length)
+          throw Object.assign(
+            new Error('Every opportunity URL requires deterministic source mapping'),
+            { code: 'SOURCE_MAPPING_REQUIRED' },
+          );
+        const repositoryState = await inspectRepository(String(source.repository.local_path));
+        if (!repositoryState.clean || repositoryState.headSha !== source.repository.head_sha)
+          throw Object.assign(new Error('Repository state changed after source refresh'), {
+            code: 'SOURCE_REPOSITORY_STALE',
+          });
+        const contexts: SourceContext[] = [];
+        for (const item of deterministic) {
+          const mapping: RouteMapping = {
+            routePath: item.route_path,
+            status: item.mapping_status,
+            primarySourcePath: item.primary_source_path,
+            relatedSourcePaths: item.related_source_paths ?? [],
+            evidence: item.mapping_evidence ?? {},
+          };
+          contexts.push(await buildSourceContext(repositoryState, mapping));
+        }
+        const primaryPaths = contexts
+          .map((item) => item.routeMapping.primarySourcePath)
+          .filter(Boolean) as string[];
+        const allFiles = contexts.flatMap((item) => item.files);
+        const files = [
+          ...primaryPaths.map((primary) => allFiles.find((file) => file.path === primary)!),
+          ...allFiles,
+        ]
+          .filter(Boolean)
+          .filter(
+            (file, index, all) =>
+              all.findIndex((candidate) => candidate.path === file.path) === index,
+          )
+          .slice(0, 6);
+        let remaining = 40_000;
+        const boundedFiles = files
+          .map((file) => {
+            const excerpt = file.excerpts[0]!;
+            const text = excerpt.text.slice(0, remaining);
+            remaining -= text.length;
+            return { ...file, excerpts: [{ ...excerpt, text }] };
+          })
+          .filter((file) => file.excerpts[0]!.text.length);
+        const context: SourceContext = {
+          repository: contexts[0]!.repository,
+          routeMapping:
+            contexts.length === 1
+              ? contexts[0]!.routeMapping
+              : {
+                  routePath: source.routes.join(' | '),
+                  status: 'MULTI_FILE_COMPOSITION',
+                  primarySourcePath: contexts[0]!.routeMapping.primarySourcePath,
+                  relatedSourcePaths: contexts
+                    .slice(1)
+                    .map((item) => item.routeMapping.primarySourcePath!)
+                    .filter(Boolean),
+                  evidence: { routes: source.routes },
+                },
+          files: boundedFiles,
+          totalCharacters: 40_000 - remaining,
+          redactions: boundedFiles.filter((file) => file.redacted).length,
+        };
+        const prepared = await createSourcePlanRun({ jobId: id, source, context }, pool);
+        runId = String(prepared.run.id);
+        if (prepared.reused) {
+          const result = {
+            sourcePlanRunId: runId,
+            reusedRunId: prepared.run.reused_run_id,
+            reused: true,
+          };
+          await recordJobEvent(id, 'SOURCE_PLAN_REUSED', result, database);
+          return { state: 'SUCCEEDED' as const, job: await markJobSucceeded(id, result, pool) };
+        }
+        await recordJobEvent(
+          id,
+          'SOURCE_PLAN_STARTED',
+          {
+            sourcePlanRunId: runId,
+            opportunityId: payload.opportunityId,
+            model: 'gpt-5.6-terra',
+            promptVersion: 'source-change-plan-prompt-v1',
+          },
+          database,
+        );
+        const provider =
+          sourcePlanProviderOverride ??
+          new OpenAiSourcePlanProvider(process.env.OPENAI_API_KEY ?? '');
+        const analysis = await provider.generate(
+          { opportunity: source.opportunity, batch5: source.batch5, context },
+          AbortSignal.timeout(Number(process.env.AI_REQUEST_TIMEOUT_MS ?? 60_000)),
+        );
+        const persisted = await persistSourcePlanSuccess(prepared.run, analysis, pool);
+        const result = {
+          sourcePlanRunId: runId,
+          planId: persisted.plan.id,
+          reused: false,
+          verdict: analysis.result.verdict,
+          inputTokens: analysis.inputTokens,
+          cachedInputTokens: analysis.cachedInputTokens,
+          outputTokens: analysis.outputTokens,
+          costMicros: persisted.costMicros,
+        };
+        await recordJobEvent(id, 'SOURCE_PLAN_COMPLETED', result, database);
+        return { state: 'SUCCEEDED' as const, job: await markJobSucceeded(id, result, pool) };
+      } catch (error) {
+        const code = String((error as { code?: string }).code ?? 'SOURCE_PLAN_FAILED');
+        const summary = error instanceof Error ? error.message : 'Source plan failed';
+        if (runId) await failSourcePlanRun(runId, code, summary, pool);
+        await recordJobEvent(
+          id,
+          'SOURCE_PLAN_FAILED',
+          {
+            sourcePlanRunId: runId,
+            opportunityId: payload.opportunityId,
+            code,
+            summary: summary.slice(0, 200),
+          },
+          database,
+        );
+        throw error;
+      }
     }
     if (type === 'SITE_CRAWL') {
       const siteId = String(job.site_id ?? '');

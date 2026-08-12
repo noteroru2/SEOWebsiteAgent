@@ -53,10 +53,43 @@ export const siteRepositories = pgTable(
       .notNull()
       .references(() => sites.id, { onDelete: 'cascade' }),
     localPath: text('local_path').notNull(),
+    repositoryType: text('repository_type').notNull().default('LOCAL_GIT'),
+    expectedRemote: text('expected_remote'),
     defaultBranch: text('default_branch'),
+    enabled: boolean('enabled').notNull().default(true),
+    headSha: text('head_sha'),
+    currentBranch: text('current_branch'),
+    originUrl: text('origin_url'),
+    worktreeClean: boolean('worktree_clean'),
+    trackedFileCount: integer('tracked_file_count'),
+    lastRefreshedAt: timestamp('last_refreshed_at', { withTimezone: true }),
     ...timestamps,
   },
   (t) => [index('site_repositories_site_idx').on(t.siteId)],
+);
+export const sourceRouteMappings = pgTable(
+  'source_route_mappings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => siteRepositories.id, { onDelete: 'cascade' }),
+    routeUrl: text('route_url').notNull(),
+    routePath: text('route_path').notNull(),
+    mappingStatus: text('mapping_status').notNull(),
+    primarySourcePath: text('primary_source_path'),
+    relatedSourcePaths: jsonb('related_source_paths').notNull().default([]),
+    repositoryHeadSha: text('repository_head_sha').notNull(),
+    mappingEvidence: jsonb('mapping_evidence').notNull().default({}),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('source_route_mapping_repo_route_idx').on(t.repositoryId, t.routePath),
+    index('source_route_mapping_site_status_idx').on(t.siteId, t.mappingStatus),
+  ],
 );
 export const jobs = pgTable(
   'jobs',
@@ -622,6 +655,78 @@ export const aiRecommendations = pgTable(
   },
   (t) => [index('ai_recommendations_opportunity_idx').on(t.opportunityId, t.createdAt)],
 );
+export const sourcePlanRuns = pgTable(
+  'source_plan_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    opportunityId: uuid('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'cascade' }),
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => siteRepositories.id, { onDelete: 'restrict' }),
+    jobId: uuid('job_id')
+      .unique()
+      .references(() => jobs.id, { onDelete: 'set null' }),
+    reusedRunId: uuid('reused_run_id'),
+    status: text('status').notNull().default('RUNNING'),
+    model: text('model').notNull(),
+    reasoningEffort: text('reasoning_effort').notNull(),
+    promptVersion: text('prompt_version').notNull(),
+    schemaVersion: text('schema_version').notNull(),
+    repositoryHeadSha: text('repository_head_sha').notNull(),
+    sourceEvidenceHash: text('source_evidence_hash').notNull(),
+    sourceContext: jsonb('source_context').notNull().default({}),
+    inputTokens: integer('input_tokens').notNull().default(0),
+    cachedInputTokens: integer('cached_input_tokens').notNull().default(0),
+    outputTokens: integer('output_tokens').notNull().default(0),
+    actualCostMicros: integer('actual_cost_micros').notNull().default(0),
+    providerRequestId: text('provider_request_id'),
+    latencyMs: integer('latency_ms'),
+    failureCode: text('failure_code'),
+    failureSummary: text('failure_summary'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    index('source_plan_runs_opportunity_idx').on(t.opportunityId, t.createdAt),
+    index('source_plan_runs_reuse_idx').on(t.sourceEvidenceHash, t.status),
+  ],
+);
+export const sourceChangePlans = pgTable(
+  'source_change_plans',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    runId: uuid('run_id')
+      .notNull()
+      .unique()
+      .references(() => sourcePlanRuns.id, { onDelete: 'cascade' }),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    opportunityId: uuid('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'cascade' }),
+    verdict: text('verdict').notNull(),
+    confidence: text('confidence').notNull(),
+    batch5Reconciliation: text('batch5_reconciliation').notNull(),
+    summary: text('summary').notNull(),
+    structuredOutput: jsonb('structured_output').notNull(),
+    status: text('status').notNull().default('READY_FOR_REVIEW'),
+    approvedAt: timestamp('approved_at', { withTimezone: true }),
+    rejectedAt: timestamp('rejected_at', { withTimezone: true }),
+    staleAt: timestamp('stale_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    index('source_change_plans_status_idx').on(t.status, t.createdAt),
+    index('source_change_plans_opportunity_idx').on(t.opportunityId, t.createdAt),
+  ],
+);
 export const approvals = pgTable(
   'approvals',
   {
@@ -646,6 +751,9 @@ export const aiUsage = pgTable(
       onDelete: 'set null',
     }),
     analysisRunId: uuid('analysis_run_id').references(() => aiAnalysisRuns.id, {
+      onDelete: 'set null',
+    }),
+    sourcePlanRunId: uuid('source_plan_run_id').references(() => sourcePlanRuns.id, {
       onDelete: 'set null',
     }),
     provider: text('provider').notNull(),

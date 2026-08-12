@@ -43,6 +43,13 @@
       "when": 1786500000000,
       "tag": "0005_ai_concurrency_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786510800000,
+      "tag": "0006_source_understanding",
+      "breakpoints": true
     }
   ]
 }

@@ -41,6 +41,9 @@ import {
   persistSerpCaptureSuccess,
   persistSerpCaptureFailure,
   type Database,
+  reserveSerpProviderAttempt,
+  persistSerpApiSuccess,
+  persistSerpApiFailure,
 } from '@seo-agent/database';
 import { resourceGuardFromEnv, type ResourceGuard } from '@seo-agent/resource-guard';
 import { crawlSite } from '@seo-agent/crawler';
@@ -78,6 +81,12 @@ import {
   type SearchConsoleApi,
 } from '@seo-agent/gsc';
 import { captureGoogleSerp } from '@seo-agent/serp-capture';
+import {
+  providerFromEnv,
+  SerpProviderError,
+  type ProviderName,
+  type SerpProvider,
+} from '@seo-agent/serp-providers';
 
 export async function executeOne(
   workerId: string,
@@ -86,6 +95,7 @@ export async function executeOne(
   gscApiOverride?: SearchConsoleApi,
   aiProviderOverride?: ReasoningProvider,
   sourcePlanProviderOverride?: SourcePlanProvider,
+  serpProviderFactory: (name: ProviderName) => SerpProvider = providerFromEnv,
 ) {
   const resource = await guard.evaluate();
   if (!resource.allowed) return { state: 'RESOURCE_DENIED' as const, resource };
@@ -146,6 +156,83 @@ export async function executeOne(
         await persistSerpCaptureFailure(payload.captureId, 'CAPTURE_FAILED', safe.message, pool);
         throw Object.assign(safe, { code: 'CAPTURE_FAILED' });
       }
+    }
+    if (type === 'FETCH_SERP_API') {
+      const payload = (job.payload ?? {}) as { captureId?: string };
+      if (!payload.captureId)
+        throw Object.assign(new Error('SERP API capture identity required'), {
+          code: 'CAPTURE_INVALID',
+        });
+      for (let attemptNumber = 1; attemptNumber <= 4; attemptNumber += 1) {
+        const attempt = await reserveSerpProviderAttempt(payload.captureId, undefined, pool);
+        if (!attempt) {
+          await recordJobEvent(
+            id,
+            'SERP_API_FALLBACK_REQUIRED',
+            { fallback: 'OWNER_BROWSER' },
+            database,
+          );
+          return {
+            state: 'SUCCEEDED' as const,
+            job: await markJobSucceeded(id, { fallback: 'OWNER_BROWSER' }, pool),
+          };
+        }
+        await recordJobEvent(
+          id,
+          'SERP_API_FETCH_STARTED',
+          { captureId: payload.captureId, provider: attempt.provider, attemptNumber },
+          database,
+        );
+        try {
+          const provider = serpProviderFactory(attempt.provider);
+          const result = await provider.search(
+            attempt.requirement,
+            AbortSignal.timeout(Number(process.env.SERP_API_TIMEOUT_MS ?? 15_000)),
+          );
+          const persisted = await persistSerpApiSuccess(payload.captureId, result, pool);
+          await recordJobEvent(
+            id,
+            'SERP_API_CAPTURED',
+            { captureId: payload.captureId, provider: attempt.provider, ...persisted },
+            database,
+          );
+          return {
+            state: 'SUCCEEDED' as const,
+            job: await markJobSucceeded(
+              id,
+              { captureId: payload.captureId, provider: attempt.provider, ...persisted },
+              pool,
+            ),
+          };
+        } catch (error) {
+          const providerError =
+            error instanceof SerpProviderError
+              ? error
+              : new SerpProviderError(
+                  'TEMPORARILY_UNAVAILABLE',
+                  error instanceof Error ? error.message : 'Provider request failed',
+                );
+          await persistSerpApiFailure(
+            {
+              captureId: payload.captureId,
+              provider: attempt.provider,
+              category: providerError.category,
+              summary: providerError.message,
+              provenNonCounted: providerError.provenNonCounted,
+            },
+            pool,
+          );
+          await recordJobEvent(
+            id,
+            'SERP_API_PROVIDER_FAILED',
+            { provider: attempt.provider, category: providerError.category },
+            database,
+          );
+        }
+      }
+      throw Object.assign(new Error('No free SERP provider succeeded'), {
+        code: 'SERP_PROVIDER_POOL_EXHAUSTED',
+      });
     }
     if (type === 'REFRESH_SOURCE_REPOSITORY') {
       const siteId = String(job.site_id ?? '');

@@ -11,6 +11,7 @@ const nav = [
   ['/sites', 'Sites'],
   ['/opportunities', 'Opportunities'],
   ['/jobs', 'Jobs'],
+  ['/serp-providers', 'SERP Providers'],
   ['/approvals', 'Approvals'],
 ] as const;
 export default function Layout({ children }: Readonly<{ children: React.ReactNode }>) {

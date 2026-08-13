@@ -10,6 +10,7 @@
     "@seo-agent/opportunity-engine": "0.1.0",
     "@seo-agent/seo-engine": "0.1.0",
     "@seo-agent/serp-capture": "0.1.0",
+    "@seo-agent/serp-providers": "0.1.0",
     "@seo-agent/shared": "0.1.0",
     "@seo-agent/source-understanding": "0.1.0"
   }

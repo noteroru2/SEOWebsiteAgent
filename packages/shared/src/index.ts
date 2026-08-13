@@ -101,6 +101,7 @@ export const jobTypes = [
   'REFRESH_SOURCE_REPOSITORY',
   'GENERATE_SOURCE_CHANGE_PLAN',
   'CAPTURE_SERP',
+  'FETCH_SERP_API',
 ] as const;
 export type JobType = (typeof jobTypes)[number];
 
@@ -169,6 +170,15 @@ export const enqueueJobSchema = z
         code: 'custom',
         path: ['captureId'],
         message: 'CAPTURE_SERP requires siteId, opportunityId and captureId',
+      });
+    if (
+      value.type === 'FETCH_SERP_API' &&
+      (!value.siteId || !value.opportunityId || !value.captureId)
+    )
+      ctx.addIssue({
+        code: 'custom',
+        path: ['captureId'],
+        message: 'FETCH_SERP_API requires siteId, opportunityId and captureId',
       });
   });
 

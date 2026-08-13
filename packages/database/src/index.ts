@@ -12,6 +12,7 @@ export * from './ai-recommendations';
 export * from './source-plans';
 export * from './evidence-resolution';
 export * from './evidence-automation';
+export * from './serp-providers';
 export type Database = ReturnType<typeof drizzle<typeof schema>>;
 let singleton: { pool: Pool; db: Database } | undefined;
 
@@ -48,19 +49,18 @@ export async function enqueueJob(input: unknown, database = getDatabase().db) {
     type: value.type,
     siteId: value.siteId,
     heavy: !deduplicatedTypes.includes(value.type),
-    payload:
-      value.type === 'CAPTURE_SERP'
-        ? { opportunityId: value.opportunityId, captureId: value.captureId }
-        : ['ANALYZE_OPPORTUNITY', 'GENERATE_SOURCE_CHANGE_PLAN'].includes(value.type)
-          ? {
-              opportunityId: value.opportunityId,
-              reanalyze: value.reanalyze === true,
-              evidenceReevaluation: value.evidenceReevaluation === true,
-              evidencePacketHash: value.evidencePacketHash,
-            }
-          : value.mode
-            ? { mode: value.mode }
-            : {},
+    payload: ['CAPTURE_SERP', 'FETCH_SERP_API'].includes(value.type)
+      ? { opportunityId: value.opportunityId, captureId: value.captureId }
+      : ['ANALYZE_OPPORTUNITY', 'GENERATE_SOURCE_CHANGE_PLAN'].includes(value.type)
+        ? {
+            opportunityId: value.opportunityId,
+            reanalyze: value.reanalyze === true,
+            evidenceReevaluation: value.evidenceReevaluation === true,
+            evidencePacketHash: value.evidencePacketHash,
+          }
+        : value.mode
+          ? { mode: value.mode }
+          : {},
   });
   const [job] = deduplicatedTypes.includes(value.type)
     ? await insert.onConflictDoNothing().returning()
@@ -610,6 +610,7 @@ export const registeredJobTypes: ReadonlySet<JobType> = new Set([
   'REFRESH_SOURCE_REPOSITORY',
   'GENERATE_SOURCE_CHANGE_PLAN',
   'CAPTURE_SERP',
+  'FETCH_SERP_API',
 ]);
 
 export async function createGscOAuthState(

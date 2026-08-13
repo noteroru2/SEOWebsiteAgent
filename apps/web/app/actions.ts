@@ -19,7 +19,12 @@ import {
   confirmSerpCapture,
   discardSerpCapture,
   autoResolveOwnerBusinessConfirmation,
+  enqueueSerpApiCapture,
+  configureSerpProvider,
+  acceptSerpApiCapture,
+  rejectSerpApiCapture,
 } from '@seo-agent/database';
+import type { ProviderName, SerpDevice } from '@seo-agent/serp-providers';
 import { inspectRepository } from '@seo-agent/source-understanding';
 import { createSiteSchema } from '@seo-agent/shared';
 import { assertSafeTarget } from '@seo-agent/crawler';
@@ -378,5 +383,49 @@ export async function confirmSerpCaptureAction(
 
 export async function discardSerpCaptureAction(opportunityId: string, captureId: string) {
   await discardSerpCapture(captureId);
+  revalidatePath(`/opportunities/${opportunityId}`);
+}
+
+export async function fetchSerpApiAction(
+  opportunityId: string,
+  requestId: string,
+  formData: FormData,
+) {
+  const requestedLocation = String(formData.get('requestedLocation') ?? '').trim();
+  const device = String(formData.get('device') ?? 'MOBILE') as SerpDevice;
+  if (!requestedLocation || !['DESKTOP', 'MOBILE', 'TABLET'].includes(device))
+    throw new Error('Valid location and device are required');
+  await enqueueSerpApiCapture({ opportunityId, requestId, requestedLocation, device });
+  revalidatePath(`/opportunities/${opportunityId}`);
+  revalidatePath('/jobs');
+  revalidatePath('/serp-providers');
+}
+
+export async function configureSerpProviderAction(formData: FormData) {
+  const provider = String(formData.get('provider') ?? '') as ProviderName;
+  if (!['SERPAPI', 'SERPSTACK', 'SERPER'].includes(provider)) throw new Error('Unknown provider');
+  const allowance = Number(formData.get('configuredAllowance'));
+  const periodStart = new Date(String(formData.get('periodStart') ?? ''));
+  const rawEnd = String(formData.get('periodEnd') ?? '').trim();
+  const periodEnd = rawEnd ? new Date(rawEnd) : null;
+  if (Number.isNaN(periodStart.getTime()) || (periodEnd && Number.isNaN(periodEnd.getTime())))
+    throw new Error('Valid provider period is required');
+  await configureSerpProvider({
+    provider,
+    enabled: formData.get('enabled') === 'on',
+    configuredAllowance: allowance,
+    periodStart,
+    periodEnd,
+  });
+  revalidatePath('/serp-providers');
+}
+
+export async function acceptSerpApiCaptureAction(opportunityId: string, captureId: string) {
+  await acceptSerpApiCapture(captureId);
+  revalidatePath(`/opportunities/${opportunityId}`);
+}
+
+export async function rejectSerpApiCaptureAction(opportunityId: string, captureId: string) {
+  await rejectSerpApiCapture(captureId);
   revalidatePath(`/opportunities/${opportunityId}`);
 }

@@ -811,7 +811,7 @@ export async function resolveInternalEvidenceForSix(pool: Pool = getDatabase().p
     for (const type of target.owner as readonly EvidenceRequestType[]) {
       const requirement =
         type === 'MANUAL_SERP_OBSERVATION'
-          ? `Owner-observed SERP for “${target.query}”: location, device, displayed title/snippet, ranking URL, approximate position and features.`
+          ? `SERP observation evidence for “${target.query}”: location, device, displayed title/snippet, ranking URL, approximate position and features. May be satisfied by qualified SERP API evidence, owner browser capture, or manual owner observation.`
           : type === 'OWNER_QUERY_OWNERSHIP'
             ? `Owner confirmation of preferred page role/ownership for “${target.query}”.`
             : `Owner confirmation of relevant service area, branch, appointment, accepted-product and valuation facts for “${target.query}”.`;

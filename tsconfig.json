@@ -20,7 +20,8 @@
       "@seo-agent/seo-engine": ["packages/seo-engine/src/index.ts"],
       "@seo-agent/gsc": ["packages/gsc/src/index.ts"],
       "@seo-agent/opportunity-engine": ["packages/opportunity-engine/src/index.ts"],
-      "@seo-agent/ai": ["packages/ai/src/index.ts"]
+      "@seo-agent/ai": ["packages/ai/src/index.ts"],
+      "@seo-agent/serp-providers": ["packages/serp-providers/src/index.ts"]
     }
   },
   "include": [

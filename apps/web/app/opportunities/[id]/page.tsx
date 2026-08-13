@@ -23,6 +23,9 @@ import {
   captureSerpAction,
   confirmSerpCaptureAction,
   discardSerpCaptureAction,
+  fetchSerpApiAction,
+  acceptSerpApiCaptureAction,
+  rejectSerpApiCaptureAction,
 } from '../../actions';
 import { EvidenceReevaluationControl } from './evidence-reevaluation-control';
 import { RealBrowserCaptureTool } from './real-browser-capture-tool';
@@ -229,6 +232,10 @@ function EvidenceRequiredPanel({
             (capture) => capture.request_id === request.id,
           );
           const latestCapture = captures[0] as Record<string, unknown> | undefined;
+          const apiCaptures = (automation.apiCaptures ?? []).filter(
+            (capture) => capture.request_id === request.id,
+          );
+          const latestApiCapture = apiCaptures[0] as Record<string, unknown> | undefined;
           const machine = (latestCapture?.machine_capture ?? {}) as Record<string, unknown>;
           const features = (machine.features ?? {}) as Record<string, unknown>;
           return (
@@ -242,6 +249,30 @@ function EvidenceRequiredPanel({
               </p>
               {request.status === 'OPEN' && request.type === 'MANUAL_SERP_OBSERVATION' ? (
                 <>
+                  <h3>SERP Evidence</h3>
+                  <p className="hint">
+                    Required: City · Mobile. Fetching uses one owner-authorized internal free
+                    allowance. Opening this page never consumes provider quota.
+                  </p>
+                  <form action={fetchSerpApiAction.bind(null, opportunityId, request.id)}>
+                    <label>
+                      Requested location
+                      <input
+                        name="requestedLocation"
+                        defaultValue="Ubon Ratchathani, Thailand"
+                        required
+                      />
+                    </label>
+                    <label>
+                      Device
+                      <select name="device" defaultValue="MOBILE">
+                        <option value="MOBILE">Mobile</option>
+                        <option value="DESKTOP">Desktop</option>
+                        <option value="TABLET">Tablet</option>
+                      </select>
+                    </label>
+                    <button>Fetch SERP Evidence</button>
+                  </form>
                   <h3>Automated Browser SERP capture</h3>
                   <p className="hint">
                     The query and target domain are fixed. Emulation is not a real-device
@@ -291,6 +322,98 @@ function EvidenceRequiredPanel({
                     </form>
                   ) : null}
                 </>
+              ) : null}
+              {request.status === 'RESOLVED' && request.type === 'MANUAL_SERP_OBSERVATION' ? (
+                <details>
+                  <summary>Fetch fresh SERP API evidence</summary>
+                  <p className="notice">
+                    This explicit action consumes one internal free allowance. New evidence never
+                    triggers AI automatically.
+                  </p>
+                  <form action={fetchSerpApiAction.bind(null, opportunityId, request.id)}>
+                    <input
+                      type="hidden"
+                      name="requestedLocation"
+                      value="Ubon Ratchathani, Thailand"
+                    />
+                    <input type="hidden" name="device" value="MOBILE" />
+                    <button>Fetch Fresh SERP Evidence · City · Mobile</button>
+                  </form>
+                </details>
+              ) : null}
+              {latestApiCapture ? (
+                <section className="capture-review">
+                  <h3>SERP API Capture</h3>
+                  <p>
+                    <strong>Provider:</strong> {String(latestApiCapture.provider ?? 'PENDING')}
+                  </p>
+                  <p>
+                    <strong>Status:</strong> {String(latestApiCapture.status)}
+                  </p>
+                  <p>
+                    <strong>Query:</strong> {String(latestApiCapture.query)}
+                  </p>
+                  <p>
+                    <strong>Requested location:</strong>{' '}
+                    {String(latestApiCapture.requested_location)}
+                  </p>
+                  <p>
+                    <strong>Provider location used:</strong>{' '}
+                    {String(latestApiCapture.provider_location_used ?? 'UNKNOWN')}
+                  </p>
+                  <p>
+                    <strong>Precision:</strong>{' '}
+                    {String(
+                      latestApiCapture.location_precision ?? latestApiCapture.required_precision,
+                    )}
+                  </p>
+                  <p>
+                    <strong>Device:</strong> {String(latestApiCapture.device)}
+                  </p>
+                  <p>
+                    <strong>AMPHON position:</strong>{' '}
+                    {String(latestApiCapture.target_organic_position ?? 'NOT FOUND / UNKNOWN')}
+                  </p>
+                  <p>
+                    <strong>URL:</strong> {String(latestApiCapture.target_url ?? '—')}
+                  </p>
+                  <p>
+                    <strong>Title:</strong> {String(latestApiCapture.target_title ?? '—')}
+                  </p>
+                  <p>
+                    <strong>Snippet:</strong> {String(latestApiCapture.target_snippet ?? '—')}
+                  </p>
+                  {latestApiCapture.conflict ? (
+                    <div className="notice danger-text">
+                      SERP_OBSERVATION_CONFLICT — owner and API observations are both preserved.
+                    </div>
+                  ) : null}
+                  {latestApiCapture.status === 'PENDING_REVIEW' ? (
+                    <>
+                      <form
+                        action={acceptSerpApiCaptureAction.bind(
+                          null,
+                          opportunityId,
+                          String(latestApiCapture.id),
+                        )}
+                      >
+                        <button>Accept Evidence</button>
+                      </form>
+                      <form
+                        action={rejectSerpApiCaptureAction.bind(
+                          null,
+                          opportunityId,
+                          String(latestApiCapture.id),
+                        )}
+                      >
+                        <button className="danger">Reject</button>
+                      </form>
+                    </>
+                  ) : null}
+                  <p>
+                    <a href={`#real-browser-capture-${request.id}`}>Use Real Browser Instead</a>
+                  </p>
+                </section>
               ) : null}
               {request.type === 'MANUAL_SERP_OBSERVATION' &&
               (request.status === 'OPEN' || latestCapture?.status === 'CAPTURE_BLOCKED') ? (

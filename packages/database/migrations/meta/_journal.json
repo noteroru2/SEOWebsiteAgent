@@ -78,6 +78,13 @@
       "when": 1786543200000,
       "tag": "0010_owner_assisted_serp",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786550400000,
+      "tag": "0011_free_serp_provider_pool",
+      "breakpoints": true
     }
   ]
 }

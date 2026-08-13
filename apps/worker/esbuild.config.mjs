@@ -27,5 +27,6 @@ await build({
       '../../packages/source-understanding/src/index.ts',
     ),
     '@seo-agent/serp-capture': localFile('../../packages/serp-capture/src/index.ts'),
+    '@seo-agent/serp-providers': localFile('../../packages/serp-providers/src/index.ts'),
   },
 });

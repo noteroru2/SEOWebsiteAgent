@@ -409,13 +409,16 @@ export async function evidenceAutomationPanelForOpportunity(
   opportunityId: string,
   pool: Pool = getDatabase().pool,
 ) {
-  const [facts, captures] = await Promise.all([
+  const [facts, captures, apiCaptures] = await Promise.all([
     ownerFactStateForOpportunity(opportunityId, pool),
     pool.query(`SELECT * FROM serp_captures WHERE opportunity_id=$1 ORDER BY created_at DESC`, [
       opportunityId,
     ]),
+    pool.query(`SELECT * FROM serp_api_captures WHERE opportunity_id=$1 ORDER BY created_at DESC`, [
+      opportunityId,
+    ]),
   ]);
-  return { facts, captures: captures.rows };
+  return { facts, captures: captures.rows, apiCaptures: apiCaptures.rows };
 }
 
 export async function enqueueSerpCapture(

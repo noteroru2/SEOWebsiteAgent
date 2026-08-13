@@ -85,6 +85,13 @@
       "when": 1786550400000,
       "tag": "0011_free_serp_provider_pool",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786561200000,
+      "tag": "0012_serp_owner_review_policy",
+      "breakpoints": true
     }
   ]
 }

@@ -6,6 +6,8 @@ export const locationPrecisions = ['UNKNOWN', 'COUNTRY', 'REGION', 'CITY', 'COOR
 export type LocationPrecision = (typeof locationPrecisions)[number];
 export type SerpDevice = 'DESKTOP' | 'MOBILE' | 'TABLET';
 export type FeatureState = 'PRESENT' | 'ABSENT' | 'UNKNOWN';
+export const reviewPolicies = ['AUTO_ACCEPT_IF_POLICY_ALLOWS', 'OWNER_REVIEW_REQUIRED'] as const;
+export type SerpReviewPolicy = (typeof reviewPolicies)[number];
 
 export type SerpProviderCapabilities = {
   supportsCountry: boolean;

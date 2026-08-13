@@ -23,6 +23,7 @@ import {
   invalidateSerpApiCapture,
   persistSerpApiFailure,
   persistSerpApiSuccess,
+  rejectSerpApiCapture,
   reserveSerpProviderAttempt,
   serpProviderStatus,
   storeOwnerEvidence,
@@ -323,6 +324,30 @@ let siteId = '';
 let opportunityId = '';
 let requestId = '';
 
+const normalizedFixture = (): NormalizedSerpResult => ({
+  provider: 'SERPAPI',
+  providerRequestId: 'owner-review-fixture',
+  query: requirement.query,
+  requestedLocation: requirement.requestedLocation,
+  providerLocationUsed: 'Ubon Ratchathani,Ubon Ratchathani,Thailand',
+  locationPrecision: 'CITY',
+  device: 'MOBILE',
+  capturedAt: new Date().toISOString(),
+  organicResults: [],
+  features: {
+    ads: 'UNKNOWN',
+    aiOverview: 'UNKNOWN',
+    mapPack: 'UNKNOWN',
+    peopleAlsoAsk: 'UNKNOWN',
+    shopping: 'UNKNOWN',
+  },
+  targetFound: true,
+  targetOrganicPosition: 2,
+  targetUrl: 'https://amphon.co.th/notebook',
+  targetTitle: 'AMPHON',
+  targetSnippet: 'Fixture',
+});
+
 async function seedProviderConfigs() {
   for (const [index, provider] of (['SERPAPI', 'SERPSTACK', 'SERPER'] as const).entries())
     await database.pool.query(
@@ -485,6 +510,252 @@ describe('transactional free quota and evidence integration', () => {
       database.pool,
     );
     expect(attempt?.requirement.query).toBe(expected);
+  });
+
+  it('persists review policy in capture/job identity and separates fingerprints', async () => {
+    await configureSerpProvider(
+      {
+        provider: 'SERPAPI',
+        enabled: true,
+        configuredAllowance: 2,
+        periodStart: new Date('2026-08-01T00:00:00Z'),
+        periodEnd: new Date('2026-09-01T00:00:00Z'),
+      },
+      database.pool,
+    );
+    const automatic = await enqueueSerpApiCapture(
+      {
+        opportunityId,
+        requestId,
+        requestedLocation: requirement.requestedLocation,
+        device: 'MOBILE',
+        reviewPolicy: 'AUTO_ACCEPT_IF_POLICY_ALLOWS',
+      },
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    const autoRow = (
+      await database.pool.query(
+        `SELECT c.request_fingerprint,c.review_policy,j.payload FROM serp_api_captures c
+         JOIN jobs j ON j.id=c.job_id WHERE c.id=$1`,
+        [automatic.capture!.id],
+      )
+    ).rows[0];
+    expect(autoRow.review_policy).toBe('AUTO_ACCEPT_IF_POLICY_ALLOWS');
+    expect(autoRow.payload.reviewPolicy).toBe('AUTO_ACCEPT_IF_POLICY_ALLOWS');
+    await database.pool.query(`UPDATE jobs SET status='CANCELLED' WHERE id=$1`, [
+      automatic.capture!.job_id,
+    ]);
+    await database.pool.query(`UPDATE serp_api_captures SET status='REJECTED' WHERE id=$1`, [
+      automatic.capture!.id,
+    ]);
+    const reviewed = await enqueueSerpApiCapture(
+      {
+        opportunityId,
+        requestId,
+        requestedLocation: requirement.requestedLocation,
+        device: 'MOBILE',
+        reviewPolicy: 'OWNER_REVIEW_REQUIRED',
+      },
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    const reviewRow = (
+      await database.pool.query(
+        `SELECT c.request_fingerprint,c.review_policy,j.payload FROM serp_api_captures c
+         JOIN jobs j ON j.id=c.job_id WHERE c.id=$1`,
+        [reviewed.capture!.id],
+      )
+    ).rows[0];
+    expect(reviewRow.review_policy).toBe('OWNER_REVIEW_REQUIRED');
+    expect(reviewRow.payload.reviewPolicy).toBe('OWNER_REVIEW_REQUIRED');
+    expect(reviewRow.request_fingerprint).not.toBe(autoRow.request_fingerprint);
+  });
+
+  it('makes owner review override LOW_CTR auto-accept until one idempotent explicit acceptance', async () => {
+    await configureSerpProvider(
+      {
+        provider: 'SERPAPI',
+        enabled: true,
+        configuredAllowance: 1,
+        periodStart: new Date('2026-08-01T00:00:00Z'),
+        periodEnd: new Date('2026-09-01T00:00:00Z'),
+      },
+      database.pool,
+    );
+    const repository = await database.pool.query(
+      `INSERT INTO site_repositories(site_id,local_path) VALUES($1,'C:/owner-review-fixture') RETURNING id`,
+      [siteId],
+    );
+    const run = await database.pool.query(
+      `INSERT INTO source_plan_runs(site_id,opportunity_id,repository_id,status,model,reasoning_effort,prompt_version,schema_version,repository_head_sha,source_evidence_hash,finished_at)
+       VALUES($1,$2,$3,'SUCCEEDED','fixture-model','medium','source-change-plan-prompt-v3','fixture-schema','fixture-head','old-evidence',now()) RETURNING id`,
+      [siteId, opportunityId, repository.rows[0].id],
+    );
+    const plan = await database.pool.query(
+      `INSERT INTO source_change_plans(run_id,site_id,opportunity_id,verdict,confidence,batch5_reconciliation,summary,structured_output,status)
+       VALUES($1,$2,$3,'NEEDS_MORE_EVIDENCE','MEDIUM','REFINED','Historical','{}','READY_FOR_REVIEW') RETURNING id`,
+      [run.rows[0].id, siteId, opportunityId],
+    );
+    const before = await deterministicEvidencePacket(opportunityId, database.pool);
+    const queued = await enqueueSerpApiCapture(
+      {
+        opportunityId,
+        requestId,
+        requestedLocation: requirement.requestedLocation,
+        device: 'MOBILE',
+        reviewPolicy: 'OWNER_REVIEW_REQUIRED',
+      },
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    const attempt = await reserveSerpProviderAttempt(
+      queued.capture!.id,
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    expect(attempt?.capture.review_policy).toBe('OWNER_REVIEW_REQUIRED');
+    expect(
+      await persistSerpApiSuccess(queued.capture!.id, normalizedFixture(), database.pool),
+    ).toEqual({
+      accepted: false,
+      pendingReview: true,
+      conflict: false,
+    });
+    expect(
+      (
+        await database.pool.query(
+          `SELECT status,normalized_result FROM serp_api_captures WHERE id=$1`,
+          [queued.capture!.id],
+        )
+      ).rows[0],
+    ).toMatchObject({
+      status: 'PENDING_REVIEW',
+      normalized_result: { provenance: 'SERP_API_CAPTURED' },
+    });
+    expect(
+      (await database.pool.query(`SELECT status FROM evidence_requests WHERE id=$1`, [requestId]))
+        .rows[0].status,
+    ).toBe('OPEN');
+    expect(
+      (
+        await database.pool.query(
+          `SELECT count(*)::int n FROM evidence_items WHERE request_id=$1`,
+          [requestId],
+        )
+      ).rows[0].n,
+    ).toBe(0);
+    expect(await deterministicEvidencePacket(opportunityId, database.pool)).toEqual(before);
+    expect(
+      (
+        await database.pool.query(`SELECT status FROM source_change_plans WHERE id=$1`, [
+          plan.rows[0].id,
+        ])
+      ).rows[0].status,
+    ).toBe('READY_FOR_REVIEW');
+    expect((await database.pool.query(`SELECT count(*)::int n FROM ai_usage`)).rows[0].n).toBe(0);
+
+    await acceptSerpApiCapture(queued.capture!.id, database.pool);
+    expect((await acceptSerpApiCapture(queued.capture!.id, database.pool)).idempotent).toBe(true);
+    expect(
+      (
+        await database.pool.query(
+          `SELECT count(*)::int n FROM evidence_items WHERE request_id=$1`,
+          [requestId],
+        )
+      ).rows[0].n,
+    ).toBe(1);
+    expect(
+      (
+        await database.pool.query(`SELECT status FROM serp_api_captures WHERE id=$1`, [
+          queued.capture!.id,
+        ])
+      ).rows[0].status,
+    ).toBe('ACCEPTED');
+    expect(
+      (await deterministicEvidencePacket(opportunityId, database.pool)).evidencePacketHash,
+    ).not.toBe(before.evidencePacketHash);
+    expect(
+      (
+        await database.pool.query(`SELECT status FROM source_change_plans WHERE id=$1`, [
+          plan.rows[0].id,
+        ])
+      ).rows[0].status,
+    ).toBe('STALE');
+    expect(
+      (
+        await database.pool.query(
+          `SELECT count(*)::int n FROM jobs WHERE type IN ('ANALYZE_OPPORTUNITY','GENERATE_SOURCE_CHANGE_PLAN') AND status IN ('QUEUED','RUNNING')`,
+        )
+      ).rows[0].n,
+    ).toBe(0);
+  });
+
+  it('rejects an owner-review capture without evidence, packet, request, or V3 side effects', async () => {
+    await configureSerpProvider(
+      {
+        provider: 'SERPAPI',
+        enabled: true,
+        configuredAllowance: 1,
+        periodStart: new Date('2026-08-01T00:00:00Z'),
+        periodEnd: new Date('2026-09-01T00:00:00Z'),
+      },
+      database.pool,
+    );
+    const repository = await database.pool.query(
+      `INSERT INTO site_repositories(site_id,local_path) VALUES($1,'C:/reject-review-fixture') RETURNING id`,
+      [siteId],
+    );
+    const run = await database.pool.query(
+      `INSERT INTO source_plan_runs(site_id,opportunity_id,repository_id,status,model,reasoning_effort,prompt_version,schema_version,repository_head_sha,source_evidence_hash,finished_at)
+       VALUES($1,$2,$3,'SUCCEEDED','fixture-model','medium','source-change-plan-prompt-v3','fixture-schema','fixture-head','old-evidence',now()) RETURNING id`,
+      [siteId, opportunityId, repository.rows[0].id],
+    );
+    const plan = await database.pool.query(
+      `INSERT INTO source_change_plans(run_id,site_id,opportunity_id,verdict,confidence,batch5_reconciliation,summary,structured_output,status)
+       VALUES($1,$2,$3,'NEEDS_MORE_EVIDENCE','MEDIUM','REFINED','Historical','{}','READY_FOR_REVIEW') RETURNING id`,
+      [run.rows[0].id, siteId, opportunityId],
+    );
+    const before = await deterministicEvidencePacket(opportunityId, database.pool);
+    const queued = await enqueueSerpApiCapture(
+      {
+        opportunityId,
+        requestId,
+        requestedLocation: requirement.requestedLocation,
+        device: 'MOBILE',
+        reviewPolicy: 'OWNER_REVIEW_REQUIRED',
+      },
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    await reserveSerpProviderAttempt(
+      queued.capture!.id,
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    await persistSerpApiSuccess(queued.capture!.id, normalizedFixture(), database.pool);
+    const rejected = await rejectSerpApiCapture(queued.capture!.id, database.pool);
+    expect(rejected).toMatchObject({ status: 'REJECTED', review_policy: 'OWNER_REVIEW_REQUIRED' });
+    expect(
+      (
+        await database.pool.query(
+          `SELECT count(*)::int n FROM evidence_items WHERE request_id=$1`,
+          [requestId],
+        )
+      ).rows[0].n,
+    ).toBe(0);
+    expect(
+      (await database.pool.query(`SELECT status FROM evidence_requests WHERE id=$1`, [requestId]))
+        .rows[0].status,
+    ).toBe('OPEN');
+    expect(await deterministicEvidencePacket(opportunityId, database.pool)).toEqual(before);
+    expect(
+      (
+        await database.pool.query(`SELECT status FROM source_change_plans WHERE id=$1`, [
+          plan.rows[0].id,
+        ])
+      ).rows[0].status,
+    ).toBe('READY_FOR_REVIEW');
   });
 
   it('success consumes allowance, creates API provenance, hashes evidence, stales V3, and enqueues no AI', async () => {
@@ -711,6 +982,7 @@ describe('transactional free quota and evidence integration', () => {
         requestId,
         requestedLocation: requirement.requestedLocation,
         device: 'MOBILE',
+        reviewPolicy: 'OWNER_REVIEW_REQUIRED',
       },
       { SERPAPI: true, SERPSTACK: false, SERPER: false },
       database.pool,

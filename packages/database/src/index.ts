@@ -50,7 +50,11 @@ export async function enqueueJob(input: unknown, database = getDatabase().db) {
     siteId: value.siteId,
     heavy: !deduplicatedTypes.includes(value.type),
     payload: ['CAPTURE_SERP', 'FETCH_SERP_API'].includes(value.type)
-      ? { opportunityId: value.opportunityId, captureId: value.captureId }
+      ? {
+          opportunityId: value.opportunityId,
+          captureId: value.captureId,
+          ...(value.type === 'FETCH_SERP_API' ? { reviewPolicy: value.reviewPolicy } : {}),
+        }
       : ['ANALYZE_OPPORTUNITY', 'GENERATE_SOURCE_CHANGE_PLAN'].includes(value.type)
         ? {
             opportunityId: value.opportunityId,

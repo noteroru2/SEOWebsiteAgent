@@ -328,7 +328,7 @@ function EvidenceRequiredPanel({
                   <summary>Fetch fresh SERP API evidence</summary>
                   <p className="notice">
                     This explicit action consumes one internal free allowance. New evidence never
-                    triggers AI automatically.
+                    triggers AI automatically. Captures always require owner review.
                   </p>
                   <form action={fetchSerpApiAction.bind(null, opportunityId, request.id)}>
                     <input
@@ -348,7 +348,13 @@ function EvidenceRequiredPanel({
                     <strong>Provider:</strong> {String(latestApiCapture.provider ?? 'PENDING')}
                   </p>
                   <p>
-                    <strong>Status:</strong> {String(latestApiCapture.status)}
+                    <strong>Status:</strong>{' '}
+                    {latestApiCapture.status === 'PENDING_REVIEW'
+                      ? 'Captured — Review Required'
+                      : String(latestApiCapture.status)}
+                  </p>
+                  <p>
+                    <strong>Review policy:</strong> {String(latestApiCapture.review_policy)}
                   </p>
                   <p>
                     <strong>Query:</strong> {String(latestApiCapture.query)}
@@ -383,6 +389,17 @@ function EvidenceRequiredPanel({
                   <p>
                     <strong>Snippet:</strong> {String(latestApiCapture.target_snippet ?? '—')}
                   </p>
+                  <p>
+                    <strong>Features:</strong>
+                  </p>
+                  <pre>
+                    {JSON.stringify(
+                      ((latestApiCapture.normalized_result as Record<string, unknown> | null)
+                        ?.features as Record<string, unknown> | undefined) ?? {},
+                      null,
+                      2,
+                    )}
+                  </pre>
                   {latestApiCapture.conflict ? (
                     <div className="notice danger-text">
                       SERP_OBSERVATION_CONFLICT — owner and API observations are both preserved.

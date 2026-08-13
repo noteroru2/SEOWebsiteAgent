@@ -395,7 +395,13 @@ export async function fetchSerpApiAction(
   const device = String(formData.get('device') ?? 'MOBILE') as SerpDevice;
   if (!requestedLocation || !['DESKTOP', 'MOBILE', 'TABLET'].includes(device))
     throw new Error('Valid location and device are required');
-  await enqueueSerpApiCapture({ opportunityId, requestId, requestedLocation, device });
+  await enqueueSerpApiCapture({
+    opportunityId,
+    requestId,
+    requestedLocation,
+    device,
+    reviewPolicy: 'OWNER_REVIEW_REQUIRED',
+  });
   revalidatePath(`/opportunities/${opportunityId}`);
   revalidatePath('/jobs');
   revalidatePath('/serp-providers');

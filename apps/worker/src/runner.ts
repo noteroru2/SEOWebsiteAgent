@@ -158,7 +158,10 @@ export async function executeOne(
       }
     }
     if (type === 'FETCH_SERP_API') {
-      const payload = (job.payload ?? {}) as { captureId?: string };
+      const payload = (job.payload ?? {}) as {
+        captureId?: string;
+        reviewPolicy?: 'AUTO_ACCEPT_IF_POLICY_ALLOWS' | 'OWNER_REVIEW_REQUIRED';
+      };
       if (!payload.captureId)
         throw Object.assign(new Error('SERP API capture identity required'), {
           code: 'CAPTURE_INVALID',
@@ -177,6 +180,10 @@ export async function executeOne(
             job: await markJobSucceeded(id, { fallback: 'OWNER_BROWSER' }, pool),
           };
         }
+        if (payload.reviewPolicy && payload.reviewPolicy !== attempt.capture.review_policy)
+          throw Object.assign(new Error('SERP review policy identity mismatch'), {
+            code: 'SERP_REVIEW_POLICY_MISMATCH',
+          });
         await recordJobEvent(
           id,
           'SERP_API_FETCH_STARTED',

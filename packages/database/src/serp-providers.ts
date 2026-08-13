@@ -7,6 +7,7 @@ import {
   type SerpDevice,
   type SerpEvidenceRequirement,
   type SerpProviderCapabilities,
+  type SerpReviewPolicy,
 } from '@seo-agent/serp-providers';
 import { evidenceHash, recordEvidenceItem } from './evidence-resolution';
 import { getDatabase } from './index';
@@ -102,8 +103,12 @@ export async function configureSerpProvider(
   }
 }
 
-function requestFingerprint(requestId: string, requirement: SerpEvidenceRequirement) {
-  return evidenceHash({ requestId, ...requirement });
+function requestFingerprint(
+  requestId: string,
+  requirement: SerpEvidenceRequirement,
+  reviewPolicy: SerpReviewPolicy,
+) {
+  return evidenceHash({ requestId, reviewPolicy, ...requirement });
 }
 
 export async function enqueueSerpApiCapture(
@@ -113,6 +118,7 @@ export async function enqueueSerpApiCapture(
     requestedLocation: string;
     device?: SerpDevice;
     maxOrganicResults?: 20 | 30;
+    reviewPolicy?: SerpReviewPolicy;
   },
   configured = providerCredentialsConfigured(),
   pool: Pool = getDatabase().pool,
@@ -135,6 +141,7 @@ export async function enqueueSerpApiCapture(
     targetDomain,
     maxOrganicResults: input.maxOrganicResults,
   });
+  const reviewPolicy = input.reviewPolicy ?? 'AUTO_ACCEPT_IF_POLICY_ALLOWS';
   const status = await serpProviderStatus(configured, pool);
   const provider = selectProvider(
     requirement,
@@ -149,7 +156,7 @@ export async function enqueueSerpApiCapture(
     })),
   );
   if (!provider) return { queued: false as const, fallback: 'OWNER_BROWSER' as const, requirement };
-  const fingerprint = requestFingerprint(input.requestId, requirement);
+  const fingerprint = requestFingerprint(input.requestId, requirement, reviewPolicy);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -164,8 +171,8 @@ export async function enqueueSerpApiCapture(
     }
     const capture = await client.query(
       `INSERT INTO serp_api_captures(site_id,opportunity_id,request_id,provider,request_fingerprint,
-       query,requested_location,required_precision,device,target_domain,max_organic_results)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+       query,requested_location,required_precision,device,target_domain,max_organic_results,review_policy)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
       [
         row.site_id,
         input.opportunityId,
@@ -178,6 +185,7 @@ export async function enqueueSerpApiCapture(
         requirement.device,
         requirement.targetDomain,
         requirement.maxOrganicResults,
+        reviewPolicy,
       ],
     );
     const job = await client.query(
@@ -188,6 +196,7 @@ export async function enqueueSerpApiCapture(
           captureId: capture.rows[0].id,
           requestId: input.requestId,
           opportunityId: input.opportunityId,
+          reviewPolicy,
         }),
       ],
     );
@@ -365,7 +374,9 @@ export async function persistSerpApiSuccess(
       evidenceQuality: result.locationPrecision === 'CITY' ? 'SERP_API_CITY' : 'SERP_API_COUNTRY',
       conflict: conflict ? 'SERP_OBSERVATION_CONFLICT' : null,
     };
-    const autoAccepted = autoAcceptOpportunityKinds.has(String(capture.opportunity_kind));
+    const autoAccepted =
+      capture.review_policy !== 'OWNER_REVIEW_REQUIRED' &&
+      autoAcceptOpportunityKinds.has(String(capture.opportunity_kind));
     if (autoAccepted) {
       await recordEvidenceItem(
         String(capture.request_id),
@@ -388,7 +399,7 @@ export async function persistSerpApiSuccess(
       expires_at=$13::timestamptz+($14::int*interval '1 hour'),updated_at=now() WHERE id=$1`,
       [
         captureId,
-        JSON.stringify(result),
+        JSON.stringify(evidence),
         result.providerRequestId,
         result.providerLocationUsed,
         result.locationPrecision,
@@ -425,10 +436,14 @@ export async function acceptSerpApiCapture(captureId: string, pool: Pool = getDa
     await client.query('BEGIN');
     const capture = (
       await client.query(
-        `SELECT * FROM serp_api_captures WHERE id=$1 AND status='PENDING_REVIEW' FOR UPDATE`,
+        `SELECT * FROM serp_api_captures WHERE id=$1 AND status IN ('PENDING_REVIEW','ACCEPTED') FOR UPDATE`,
         [captureId],
       )
     ).rows[0];
+    if (capture?.status === 'ACCEPTED') {
+      await client.query('COMMIT');
+      return { ...capture, idempotent: true };
+    }
     if (!capture?.normalized_result) throw new Error('Reviewable SERP API capture required');
     const result = capture.normalized_result as NormalizedSerpResult;
     await recordEvidenceItem(

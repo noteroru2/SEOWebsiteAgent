@@ -137,6 +137,7 @@ export const enqueueJobSchema = z
       .regex(/^[a-f0-9]{64}$/)
       .optional(),
     captureId: z.string().uuid().optional(),
+    reviewPolicy: z.enum(['AUTO_ACCEPT_IF_POLICY_ALLOWS', 'OWNER_REVIEW_REQUIRED']).optional(),
   })
   .superRefine((value, ctx) => {
     if (

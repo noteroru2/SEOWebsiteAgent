@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import { createServer } from 'node:http';
 import {
   capabilityMismatch,
   classifyEvidenceRequirement,
@@ -19,6 +20,7 @@ import {
   deterministicEvidencePacket,
   enqueueSerpApiCapture,
   ensureEvidenceRequest,
+  invalidateSerpApiCapture,
   persistSerpApiFailure,
   persistSerpApiSuccess,
   reserveSerpProviderAttempt,
@@ -32,6 +34,17 @@ const requirement = classifyEvidenceRequirement({
   requestedLocation: 'Ubon Ratchathani, Thailand',
   device: 'MOBILE',
 });
+
+const unicodeQueryMatrix = [
+  'รับซื้อโน๊ตบุ๊ค ใกล้ฉัน',
+  'รับซื้อ ram',
+  'อำพล เทรดดิ้ง',
+  'รับซื้อโทรศัพท์ใกล้ฉัน',
+  'mac mini m4 มือสอง',
+  'รับ ซื้อ โน๊ต บุ๊ค',
+  'รับซื้อ notebook RAM 16GB',
+  'โน๊ตบุ๊ค/มือถือ + RAM?',
+] as const;
 
 const candidate = (
   provider: 'SERPAPI' | 'SERPSTACK' | 'SERPER',
@@ -237,6 +250,74 @@ describe.each([
   });
 });
 
+describe('SerpApi Unicode HTTP transport', () => {
+  it.each(unicodeQueryMatrix)(
+    'preserves %s character-for-character through URL encoding and a local HTTP server',
+    async (query) => {
+      let received:
+        | {
+            query: string | null;
+            location: string | null;
+            device: string | null;
+            hl: string | null;
+            gl: string | null;
+          }
+        | undefined;
+      const server = createServer((request, response) => {
+        const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+        received = {
+          query: url.searchParams.get('q'),
+          location: url.searchParams.get('location'),
+          device: url.searchParams.get('device'),
+          hl: url.searchParams.get('hl'),
+          gl: url.searchParams.get('gl'),
+        };
+        response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        response.end(
+          JSON.stringify({
+            search_metadata: { id: 'local-unicode-fixture' },
+            search_parameters: { location_used: received.location },
+            organic_results: [],
+          }),
+        );
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      try {
+        const address = server.address();
+        if (!address || typeof address === 'string')
+          throw new Error('Local fixture server unavailable');
+        const adapter = new SerpApiProvider(
+          'fixture-key',
+          fetch,
+          `http://127.0.0.1:${address.port}/search.json`,
+        );
+        await adapter.search(
+          {
+            ...requirement,
+            query,
+            requestedLocation: 'Ubon Ratchathani,Ubon Ratchathani,Thailand',
+            device: 'MOBILE',
+          },
+          AbortSignal.timeout(2_000),
+        );
+        expect(received).toEqual({
+          query,
+          location: 'Ubon Ratchathani,Ubon Ratchathani,Thailand',
+          device: 'mobile',
+          hl: 'th',
+          gl: 'th',
+        });
+        expect(decodeURIComponent(encodeURIComponent(query))).toBe(query);
+        expect(query).not.toContain('\uFFFD');
+      } finally {
+        await new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        );
+      }
+    },
+  );
+});
+
 const database = createDatabase(requireTestDatabaseUrl());
 let siteId = '';
 let opportunityId = '';
@@ -356,6 +437,54 @@ describe('transactional free quota and evidence integration', () => {
       reserved: 1,
       remaining: 0,
     });
+  });
+
+  it('preserves the exact Thai query across opportunity, capture, job identity, and worker reservation', async () => {
+    await configureSerpProvider(
+      {
+        provider: 'SERPAPI',
+        enabled: true,
+        configuredAllowance: 1,
+        periodStart: new Date('2026-08-01T00:00:00Z'),
+        periodEnd: new Date('2026-09-01T00:00:00Z'),
+      },
+      database.pool,
+    );
+    const expected = 'รับซื้อโน๊ตบุ๊ค ใกล้ฉัน';
+    expect(requirement.query).toBe(expected);
+    const queued = await enqueueSerpApiCapture(
+      {
+        opportunityId,
+        requestId,
+        requestedLocation: 'Ubon Ratchathani,Ubon Ratchathani,Thailand',
+        device: 'MOBILE',
+      },
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    expect(queued.queued).toBe(true);
+    const persisted = await database.pool.query(
+      `SELECT o.query opportunity_query,c.query capture_query,j.payload job_payload
+       FROM serp_api_captures c JOIN opportunities o ON o.id=c.opportunity_id
+       JOIN jobs j ON j.id=c.job_id WHERE c.id=$1`,
+      [queued.capture!.id],
+    );
+    expect(persisted.rows[0]).toMatchObject({
+      opportunity_query: expected,
+      capture_query: expected,
+    });
+    expect(persisted.rows[0].job_payload).toMatchObject({
+      captureId: queued.capture!.id,
+      requestId,
+      opportunityId,
+    });
+    expect(JSON.stringify(persisted.rows[0].job_payload)).not.toContain('?');
+    const attempt = await reserveSerpProviderAttempt(
+      queued.capture!.id,
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    expect(attempt?.requirement.query).toBe(expected);
   });
 
   it('success consumes allowance, creates API provenance, hashes evidence, stales V3, and enqueues no AI', async () => {
@@ -722,5 +851,65 @@ describe('transactional free quota and evidence integration', () => {
       'OWNER_OBSERVED_SERP',
       'SERP_API_CAPTURED',
     ]);
+  });
+
+  it('invalidates a corrupted pending capture without changing evidence identity or V3 state', async () => {
+    const repository = await database.pool.query(
+      `INSERT INTO site_repositories(site_id,local_path) VALUES($1,'C:/unicode-fixture') RETURNING id`,
+      [siteId],
+    );
+    const run = await database.pool.query(
+      `INSERT INTO source_plan_runs(site_id,opportunity_id,repository_id,status,model,reasoning_effort,prompt_version,schema_version,repository_head_sha,source_evidence_hash,finished_at)
+       VALUES($1,$2,$3,'SUCCEEDED','fixture-model','medium','source-change-plan-prompt-v3','fixture-schema','fixture-head','fixture-evidence',now()) RETURNING id`,
+      [siteId, opportunityId, repository.rows[0].id],
+    );
+    const plan = await database.pool.query(
+      `INSERT INTO source_change_plans(run_id,site_id,opportunity_id,verdict,confidence,batch5_reconciliation,summary,structured_output,status)
+       VALUES($1,$2,$3,'NEEDS_MORE_EVIDENCE','MEDIUM','REFINED','Historical','{}','READY_FOR_REVIEW') RETURNING id`,
+      [run.rows[0].id, siteId, opportunityId],
+    );
+    const corrupted = '??????????????? ???????';
+    const capture = await database.pool.query(
+      `INSERT INTO serp_api_captures(site_id,opportunity_id,request_id,provider,status,request_fingerprint,query,requested_location,required_precision,device,target_domain,normalized_result,provider_request_id,captured_at)
+       VALUES($1,$2,$3,'SERPAPI','PENDING_REVIEW','unicode-invalid-fixture',$4,'Ubon Ratchathani,Ubon Ratchathani,Thailand','CITY','MOBILE','amphon.co.th',$5::jsonb,'fixture-request',now()) RETURNING id`,
+      [siteId, opportunityId, requestId, corrupted, JSON.stringify({ query: corrupted })],
+    );
+    const before = await deterministicEvidencePacket(opportunityId, database.pool);
+    const evidenceCount = (
+      await database.pool.query(`SELECT count(*)::int n FROM evidence_items WHERE request_id=$1`, [
+        requestId,
+      ])
+    ).rows[0].n;
+    const invalid = await invalidateSerpApiCapture(
+      capture.rows[0].id,
+      'QUERY_TRANSPORT_CORRUPTED',
+      database.pool,
+    );
+    expect(invalid).toMatchObject({
+      status: 'REJECTED',
+      failure_code: 'QUERY_TRANSPORT_CORRUPTED',
+      provider_request_id: 'fixture-request',
+    });
+    expect(invalid.normalized_result).toMatchObject({
+      intendedQuery: requirement.query,
+      actualTransmittedQuery: corrupted,
+      invalidationReason: 'QUERY_TRANSPORT_CORRUPTED',
+    });
+    expect(await deterministicEvidencePacket(opportunityId, database.pool)).toEqual(before);
+    expect(
+      (
+        await database.pool.query(
+          `SELECT count(*)::int n FROM evidence_items WHERE request_id=$1`,
+          [requestId],
+        )
+      ).rows[0].n,
+    ).toBe(evidenceCount);
+    expect(
+      (
+        await database.pool.query(`SELECT status FROM source_change_plans WHERE id=$1`, [
+          plan.rows[0].id,
+        ])
+      ).rows[0].status,
+    ).toBe('READY_FOR_REVIEW');
   });
 });

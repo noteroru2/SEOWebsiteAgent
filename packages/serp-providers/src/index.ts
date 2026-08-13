@@ -360,8 +360,15 @@ abstract class HttpProvider implements SerpProvider {
 export class SerpApiProvider extends HttpProvider {
   name = 'SERPAPI' as const;
   capabilities = PROVIDER_CAPABILITIES.SERPAPI;
+  constructor(
+    apiKey: string,
+    fetcher: typeof fetch = fetch,
+    private endpoint = 'https://serpapi.com/search.json',
+  ) {
+    super(apiKey, fetcher);
+  }
   async search(requirement: SerpEvidenceRequirement, signal: AbortSignal) {
-    const url = new URL('https://serpapi.com/search.json');
+    const url = new URL(this.endpoint);
     Object.entries({
       engine: 'google',
       q: requirement.query,
@@ -372,6 +379,12 @@ export class SerpApiProvider extends HttpProvider {
       num: String(requirement.maxOrganicResults),
       api_key: this.apiKey,
     }).forEach(([k, v]) => url.searchParams.set(k, v));
+    if (url.searchParams.get('q') !== requirement.query)
+      throw new SerpProviderError(
+        'MALFORMED_RESPONSE',
+        'Provider query failed Unicode round-trip validation',
+        true,
+      );
     const body = object.parse(await this.post(url.toString(), { method: 'GET', signal }));
     if (body.error)
       throw new SerpProviderError(

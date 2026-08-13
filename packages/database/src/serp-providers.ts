@@ -511,3 +511,28 @@ export async function rejectSerpApiCapture(captureId: string, pool: Pool = getDa
   if (!row.rows[0]) throw new Error('Reviewable API capture required');
   return row.rows[0];
 }
+
+export async function invalidateSerpApiCapture(
+  captureId: string,
+  reason: string,
+  pool: Pool = getDatabase().pool,
+) {
+  if (!/^[A-Z0-9_]{3,80}$/.test(reason)) throw new Error('Safe invalidation reason required');
+  const row = await pool.query(
+    `UPDATE serp_api_captures c SET
+       status='REJECTED',failure_code=$2::text,
+       failure_summary='Capture retained for audit and excluded from evidence',
+       normalized_result=coalesce(c.normalized_result,'{}'::jsonb) || jsonb_build_object(
+         'intendedQuery',o.query,
+         'actualTransmittedQuery',coalesce(c.normalized_result->>'query',c.query),
+         'invalidationReason',$2::text,
+         'invalidatedAt',now()
+       ),updated_at=now()
+     FROM opportunities o
+     WHERE c.id=$1 AND c.opportunity_id=o.id AND c.status='PENDING_REVIEW'
+     RETURNING c.*`,
+    [captureId, reason],
+  );
+  if (!row.rows[0]) throw new Error('Pending review SERP API capture required');
+  return row.rows[0];
+}

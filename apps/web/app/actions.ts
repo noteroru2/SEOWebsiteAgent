@@ -395,7 +395,7 @@ export async function fetchSerpApiAction(
     throw new Error('Browser-supplied provider location metadata is forbidden');
   const { locationProfileId, device } = verifiedSerpFetchSchema.parse({
     locationProfileId: formData.get('locationProfileId'),
-    device: formData.get('device') ?? 'MOBILE',
+    device: formData.get('device'),
   });
   await enqueueSerpApiCapture({
     opportunityId,

@@ -160,6 +160,7 @@ export async function executeOne(
     if (type === 'FETCH_SERP_API') {
       const payload = (job.payload ?? {}) as {
         captureId?: string;
+        device?: 'DESKTOP' | 'MOBILE' | 'TABLET';
         reviewPolicy?: 'AUTO_ACCEPT_IF_POLICY_ALLOWS' | 'OWNER_REVIEW_REQUIRED';
         locationProfileId?: string;
         requestedLocationLabel?: string;

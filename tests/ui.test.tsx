@@ -360,6 +360,9 @@ describe('server-rendered UI foundations', () => {
     expect(detail).toContain('Ubon Ratchathani,Ubon Ratchathani,Thailand');
     expect(detail).toContain('name="locationProfileId"');
     expect(detail).toContain('value="33333333-3333-4333-8333-333333333333"');
+    expect(detail).toContain('<option value="DESKTOP">Desktop</option>');
+    expect(detail).toContain('<option value="MOBILE" selected="">Mobile</option>');
+    expect(detail).toContain('<option value="TABLET">Tablet</option>');
     expect(detail).not.toContain('name="requestedLocation"');
     expect(detail).not.toContain('OPENAI_API_KEY=');
   });
@@ -404,6 +407,8 @@ describe('server-rendered UI foundations', () => {
           provider_location_used: 'Ubon Ratchathani,Thailand',
           location_precision: 'CITY',
           device: 'MOBILE',
+          country_code: 'th',
+          captured_at: new Date('2026-08-13T14:06:03.652Z'),
           target_found: false,
           target_organic_position: null,
           max_organic_results: 20,
@@ -424,6 +429,10 @@ describe('server-rendered UI foundations', () => {
     expect(html).toContain('SERP_OBSERVATION_CONFLICT');
     expect(html).toContain('AMPHON ~#2');
     expect(html).toContain('AMPHON not found Top 20');
+    expect(html).toContain('<strong>Device:</strong> MOBILE');
+    expect(html).toContain('<strong>Language:</strong> Thai (th)');
+    expect(html).toContain('<strong>Country:</strong> th');
+    expect(html).toContain('2026-08-13T14:06:03.000Z');
     expect(html).not.toContain('Accept Evidence');
   });
   it('shows a disabled queued state and worker warning for an active evidence re-evaluation', async () => {

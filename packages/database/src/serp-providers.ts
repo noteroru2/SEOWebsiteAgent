@@ -288,6 +288,7 @@ export async function enqueueSerpApiCapture(
           requestId: input.requestId,
           opportunityId: input.opportunityId,
           reviewPolicy,
+          device: requirement.device,
           ...location,
           requiredPrecision: requirement.requiredPrecision,
         }),
@@ -322,6 +323,7 @@ export async function reserveSerpProviderAttempt(
   expected?: Partial<VerifiedSerpLocationSnapshot> & {
     reviewPolicy?: SerpReviewPolicy;
     requiredPrecision?: SerpEvidenceRequirement['requiredPrecision'];
+    device?: SerpDevice;
   },
 ) {
   assertFreeOnlyMode();
@@ -365,6 +367,8 @@ export async function reserveSerpProviderAttempt(
       verificationSource: String(capture.location_verification_source ?? ''),
     };
     assertVerifiedLocation(requirement, snapshot, capture.location_profile_status);
+    if (expected?.device !== undefined && expected.device !== requirement.device)
+      throw new Error('SERP_DEVICE_JOB_IDENTITY_MISMATCH');
     if (
       expected &&
       (expected.reviewPolicy !== capture.review_policy ||

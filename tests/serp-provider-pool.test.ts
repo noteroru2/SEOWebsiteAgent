@@ -36,6 +36,7 @@ import {
   storeOwnerEvidence,
 } from '@seo-agent/database';
 import { ResourceGuard } from '@seo-agent/resource-guard';
+import { verifiedSerpFetchSchema } from '@seo-agent/shared';
 import { executeOne } from '../apps/worker/src/runner';
 import { requireTestDatabaseUrl, resetTestDatabase } from '../packages/database/src/test-safety';
 
@@ -71,6 +72,14 @@ const candidate = (
 });
 
 describe('capability-based free-only routing', () => {
+  it('rejects unknown browser device values at the server validation boundary', () => {
+    expect(
+      verifiedSerpFetchSchema.safeParse({
+        locationProfileId: randomUUID(),
+        device: 'SMART_TV',
+      }).success,
+    ).toBe(false);
+  });
   it.each(['รับซื้อโน้ตบุ๊ค ใกล้ฉัน', 'ร้านใกล้เคียง', 'laptop near me', 'computer shop nearby'])(
     'classifies %s as hyperlocal without AI',
     (query) => {
@@ -320,6 +329,30 @@ describe.each([
 });
 
 describe('SerpApi Unicode HTTP transport', () => {
+  it.each([
+    ['DESKTOP', 'desktop'],
+    ['MOBILE', 'mobile'],
+    ['TABLET', 'tablet'],
+  ] as const)('maps internal %s to the provider %s device', async (device, providerDevice) => {
+    let receivedDevice: string | null = null;
+    const adapter = new SerpApiProvider('fixture-key', (async (input) => {
+      const url = new URL(String(input));
+      receivedDevice = url.searchParams.get('device');
+      return new Response(
+        JSON.stringify({
+          search_metadata: { id: 'device-fixture', status: 'Success' },
+          search_parameters: { location_used: requirement.requestedLocation },
+          organic_results: [],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch);
+    await adapter.search(
+      { ...requirement, query: 'รับซื้อ ram', device },
+      AbortSignal.timeout(1_000),
+    );
+    expect(receivedDevice).toBe(providerDevice);
+  });
   it.each(unicodeQueryMatrix)(
     'preserves %s character-for-character through URL encoding and a local HTTP server',
     async (query) => {
@@ -529,6 +562,97 @@ describe('transactional free quota and evidence integration', () => {
         .rows[0].n,
     ).toBe(0);
   });
+
+  it('uses distinct capture and job identities for Desktop and Mobile', async () => {
+    await configureSerpProvider(
+      {
+        provider: 'SERPAPI',
+        enabled: true,
+        configuredAllowance: 1,
+        periodStart: new Date('2026-08-01T00:00:00Z'),
+        periodEnd: new Date('2026-09-01T00:00:00Z'),
+      },
+      database.pool,
+    );
+    const desktop = await enqueueSerpApiCapture(
+      { opportunityId, requestId, locationProfileId, device: 'DESKTOP' },
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    const mobile = await enqueueSerpApiCapture(
+      { opportunityId, requestId, locationProfileId, device: 'MOBILE' },
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    expect(desktop.capture!.id).not.toBe(mobile.capture!.id);
+    expect(desktop.capture!.request_fingerprint).not.toBe(mobile.capture!.request_fingerprint);
+    const rows = await database.pool.query(
+      `SELECT c.device,c.request_fingerprint,j.payload->>'device' job_device
+       FROM serp_api_captures c JOIN jobs j ON j.id=c.job_id
+       WHERE c.id=ANY($1::uuid[]) ORDER BY c.device`,
+      [[desktop.capture!.id, mobile.capture!.id]],
+    );
+    expect(rows.rows).toEqual([
+      expect.objectContaining({ device: 'DESKTOP', job_device: 'DESKTOP' }),
+      expect.objectContaining({ device: 'MOBILE', job_device: 'MOBILE' }),
+    ]);
+  });
+
+  it.each(['DESKTOP', 'MOBILE', 'TABLET'] as const)(
+    'preserves %s through job snapshot, worker requirement, and capture audit',
+    async (device) => {
+      await configureSerpProvider(
+        {
+          provider: 'SERPAPI',
+          enabled: true,
+          configuredAllowance: 1,
+          periodStart: new Date('2026-08-01T00:00:00Z'),
+          periodEnd: new Date('2026-09-01T00:00:00Z'),
+        },
+        database.pool,
+      );
+      const queued = await enqueueSerpApiCapture(
+        {
+          opportunityId,
+          requestId,
+          locationProfileId,
+          device,
+          reviewPolicy: 'OWNER_REVIEW_REQUIRED',
+        },
+        { SERPAPI: true, SERPSTACK: false, SERPER: false },
+        database.pool,
+      );
+      let workerDevice: string | null = null;
+      const provider: SerpProvider = {
+        name: 'SERPAPI',
+        capabilities: PROVIDER_CAPABILITIES.SERPAPI,
+        search: async (workerRequirement) => {
+          workerDevice = workerRequirement.device;
+          return { ...normalizedFixture(), device };
+        },
+      };
+      const outcome = await executeOne(
+        `device-${device.toLowerCase()}-worker`,
+        database.pool,
+        workerGuard,
+        undefined,
+        undefined,
+        undefined,
+        () => provider,
+      );
+      expect(outcome.state).toBe('SUCCEEDED');
+      expect(workerDevice).toBe(device);
+      expect(
+        (
+          await database.pool.query(
+            `SELECT c.device,c.normalized_result->>'device' result_device,j.payload->>'device' job_device
+             FROM serp_api_captures c JOIN jobs j ON j.id=c.job_id WHERE c.id=$1`,
+            [queued.capture!.id],
+          )
+        ).rows[0],
+      ).toMatchObject({ device, result_device: device, job_device: device });
+    },
+  );
 
   it('marks a job successful only when a normalized provider capture is produced', async () => {
     await configureSerpProvider(
@@ -995,6 +1119,48 @@ describe('transactional free quota and evidence integration', () => {
       )
     ).rows[0];
     expect(period).toMatchObject({ used: 0, reserved: 0 });
+  });
+
+  it('blocks a tampered device snapshot before quota reservation or provider execution', async () => {
+    await configureSerpProvider(
+      {
+        provider: 'SERPAPI',
+        enabled: true,
+        configuredAllowance: 1,
+        periodStart: new Date('2026-08-01T00:00:00Z'),
+        periodEnd: new Date('2026-09-01T00:00:00Z'),
+      },
+      database.pool,
+    );
+    const queued = await enqueueSerpApiCapture(
+      {
+        opportunityId,
+        requestId,
+        locationProfileId,
+        device: 'DESKTOP',
+        reviewPolicy: 'OWNER_REVIEW_REQUIRED',
+      },
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    const payload = (
+      await database.pool.query(`SELECT payload FROM jobs WHERE id=$1`, [queued.capture!.job_id])
+    ).rows[0].payload;
+    await expect(
+      reserveSerpProviderAttempt(
+        queued.capture!.id,
+        { SERPAPI: true, SERPSTACK: false, SERPER: false },
+        database.pool,
+        { ...payload, device: 'MOBILE' },
+      ),
+    ).rejects.toThrow('SERP_DEVICE_JOB_IDENTITY_MISMATCH');
+    expect(
+      (
+        await database.pool.query(
+          `SELECT used,reserved FROM serp_provider_usage_periods WHERE provider='SERPAPI'`,
+        )
+      ).rows[0],
+    ).toMatchObject({ used: 0, reserved: 0 });
   });
 
   it('persists review policy in capture/job identity and separates fingerprints', async () => {

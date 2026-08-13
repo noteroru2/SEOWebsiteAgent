@@ -137,6 +137,7 @@ export const enqueueJobSchema = z
       .regex(/^[a-f0-9]{64}$/)
       .optional(),
     captureId: z.string().uuid().optional(),
+    device: z.enum(['DESKTOP', 'MOBILE', 'TABLET']).optional(),
     reviewPolicy: z.enum(['AUTO_ACCEPT_IF_POLICY_ALLOWS', 'OWNER_REVIEW_REQUIRED']).optional(),
     locationProfileId: z.string().uuid().optional(),
     requestedLocationLabel: z.string().optional(),

@@ -421,7 +421,7 @@ function EvidenceRequiredPanel({
                         <strong>Provider:</strong> SerpApi
                       </p>
                       <p>
-                        <strong>Device:</strong> Mobile
+                        <strong>Device:</strong> Owner selected below
                       </p>
                       <p>
                         <strong>Review:</strong> Owner required
@@ -444,11 +444,18 @@ function EvidenceRequiredPanel({
                         ))}
                       </select>
                     </label>
-                    <input type="hidden" name="device" value="MOBILE" />
+                    <label>
+                      Device
+                      <select name="device" defaultValue="MOBILE" required>
+                        <option value="DESKTOP">Desktop</option>
+                        <option value="MOBILE">Mobile</option>
+                        <option value="TABLET">Tablet</option>
+                      </select>
+                    </label>
                     <button disabled={!location}>
                       {serpIntent === 'HYPERLOCAL'
-                        ? 'Fetch Fresh Supporting API Evidence · City · Mobile'
-                        : 'Fetch Fresh SERP Evidence · City · Mobile'}
+                        ? 'Fetch Fresh Supporting API Evidence'
+                        : 'Fetch Fresh SERP Evidence'}
                     </button>
                   </form>
                 </details>
@@ -484,6 +491,18 @@ function EvidenceRequiredPanel({
                   </p>
                   <p>
                     <strong>Device:</strong> {String(latestApiCapture.device)}
+                  </p>
+                  <p>
+                    <strong>Language:</strong> Thai (th)
+                  </p>
+                  <p>
+                    <strong>Country:</strong> {String(latestApiCapture.country_code ?? 'UNKNOWN')}
+                  </p>
+                  <p>
+                    <strong>Captured at:</strong>{' '}
+                    {latestApiCapture.captured_at
+                      ? new Date(String(latestApiCapture.captured_at)).toISOString()
+                      : 'PENDING'}
                   </p>
                   <p>
                     <strong>AMPHON position:</strong>{' '}

@@ -56,6 +56,7 @@ export async function enqueueJob(input: unknown, database = getDatabase().db) {
           ...(value.type === 'FETCH_SERP_API'
             ? {
                 reviewPolicy: value.reviewPolicy,
+                device: value.device,
                 locationProfileId: value.locationProfileId,
                 requestedLocationLabel: value.requestedLocationLabel,
                 provider: value.provider,

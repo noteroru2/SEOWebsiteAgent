@@ -49,7 +49,12 @@ export type SerpEvidenceRequirement = {
   device: SerpDevice;
   targetDomain: string;
   maxOrganicResults: 20 | 30;
+  intentClass?: SerpIntentClass;
+  evidencePolicy?: 'STANDARD_SERP' | 'HYPERLOCAL_SERP_REQUIRED';
 };
+
+export type SerpIntentClass = 'NORMAL' | 'HYPERLOCAL';
+export type SerpEvidenceTrustRole = 'PRIMARY_ELIGIBLE' | 'SUPPORTING_ONLY';
 
 export type NormalizedSerpResult = {
   provider: ProviderName;
@@ -79,6 +84,10 @@ export type NormalizedSerpResult = {
   targetUrl: string | null;
   targetTitle: string | null;
   targetSnippet: string | null;
+  providerHttpStatus?: number;
+  providerSearchStatus?: string | null;
+  providerLatencyMs?: number;
+  providerResponseContentType?: string | null;
 };
 
 export type SerpProvider = {
@@ -108,6 +117,7 @@ export type SerpFailureDiagnostics = {
   responseContentType?: string;
   providerRequestId?: string;
   providerStatus?: string;
+  latencyMs?: number;
 };
 
 const precisionRank: Record<LocationPrecision, number> = {
@@ -137,8 +147,11 @@ export function classifyEvidenceRequirement(input: {
   device?: SerpDevice;
   targetDomain?: string;
   maxOrganicResults?: 20 | 30;
+  metadata?: Record<string, unknown>;
 }): SerpEvidenceRequirement {
-  const localSensitive = /ใกล้ฉัน|ใกล้เคียง|จังหวัด|อำเภอ|near me|nearby/i.test(input.query);
+  const intentClass = classifySerpIntent(input);
+  const localSensitive =
+    intentClass === 'HYPERLOCAL' || /จังหวัด|อำเภอ|district|province/i.test(input.query);
   return {
     query: input.query.trim(),
     requestedLocation: input.requestedLocation?.trim() || 'Thailand',
@@ -146,7 +159,59 @@ export function classifyEvidenceRequirement(input: {
     device: input.device ?? (localSensitive ? 'MOBILE' : 'DESKTOP'),
     targetDomain: input.targetDomain ?? 'amphon.co.th',
     maxOrganicResults: input.maxOrganicResults ?? 20,
+    intentClass,
+    evidencePolicy: intentClass === 'HYPERLOCAL' ? 'HYPERLOCAL_SERP_REQUIRED' : 'STANDARD_SERP',
   };
+}
+
+export function classifySerpIntent(input: {
+  query: string;
+  metadata?: Record<string, unknown>;
+}): SerpIntentClass {
+  const explicit = [
+    input.metadata?.serpIntent,
+    input.metadata?.serpEvidenceRequirement,
+    input.metadata?.intentClass,
+  ];
+  if (
+    input.metadata?.HYPERLOCAL_SERP_REQUIRED === true ||
+    explicit.includes('HYPERLOCAL_SERP_REQUIRED') ||
+    explicit.includes('HYPERLOCAL')
+  )
+    return 'HYPERLOCAL';
+  return /ใกล้ฉัน|ใกล้เคียง|ใกล้ที่นี่|แถวนี้|บริเวณนี้|near[\s-]?me|nearby|nearest|closest|around\s+me/i.test(
+    input.query,
+  )
+    ? 'HYPERLOCAL'
+    : 'NORMAL';
+}
+
+export function serpEvidenceTrust(
+  intentClass: SerpIntentClass,
+  source:
+    | 'OWNER_REAL_DEVICE'
+    | 'OWNER_OBSERVED_SERP'
+    | 'OWNER_CONFIRMED_BROWSER_CAPTURE'
+    | 'SERP_API_CITY'
+    | 'SERP_API_COUNTRY'
+    | 'PLAYWRIGHT_EMULATED',
+): SerpEvidenceTrustRole {
+  if (intentClass !== 'HYPERLOCAL') return 'PRIMARY_ELIGIBLE';
+  return ['OWNER_REAL_DEVICE', 'OWNER_OBSERVED_SERP', 'OWNER_CONFIRMED_BROWSER_CAPTURE'].includes(
+    source,
+  )
+    ? 'PRIMARY_ELIGIBLE'
+    : 'SUPPORTING_ONLY';
+}
+
+export function materialSerpObservationConflict(
+  ownerPosition: number | null,
+  apiPosition: number | null,
+  apiTargetFound: boolean,
+) {
+  if (ownerPosition === null || !Number.isFinite(ownerPosition)) return false;
+  if (!apiTargetFound || apiPosition === null) return true;
+  return Math.abs(ownerPosition - apiPosition) >= 3;
 }
 
 export function selectProvider(
@@ -201,6 +266,10 @@ function normalized(
     mapPack?: unknown;
     paa?: unknown;
     shopping?: unknown;
+    httpStatus?: number;
+    searchStatus?: string | null;
+    latencyMs?: number;
+    responseContentType?: string | null;
     supported: Partial<Record<'ads' | 'aiOverview' | 'mapPack' | 'paa' | 'shopping', boolean>>;
   },
 ): NormalizedSerpResult {
@@ -248,6 +317,10 @@ function normalized(
     targetUrl: target?.url ?? null,
     targetTitle: target?.title ?? null,
     targetSnippet: target?.snippet ?? null,
+    providerHttpStatus: input.httpStatus,
+    providerSearchStatus: input.searchStatus ?? null,
+    providerLatencyMs: input.latencyMs,
+    providerResponseContentType: input.responseContentType ?? null,
   };
 }
 
@@ -478,23 +551,32 @@ abstract class HttpProvider implements SerpProvider {
     signal: AbortSignal,
   ): Promise<NormalizedSerpResult>;
   protected async post(url: string, init: RequestInit) {
+    const started = performance.now();
     try {
-      return boundedJson(await this.fetcher(url, { ...init, signal: init.signal }));
+      const bounded = await boundedJson(await this.fetcher(url, { ...init, signal: init.signal }));
+      return { ...bounded, latencyMs: performance.now() - started };
     } catch (error) {
-      if (error instanceof SerpProviderError) throw error;
+      const latencyMs = performance.now() - started;
+      if (error instanceof SerpProviderError) {
+        error.diagnostics.latencyMs ??= latencyMs;
+        throw error;
+      }
       if (
         (error instanceof DOMException && ['AbortError', 'TimeoutError'].includes(error.name)) ||
         init.signal?.aborted
       )
         throw new SerpProviderError('NETWORK_TIMEOUT', 'Provider request timed out', false, {
           origin: 'NETWORK',
+          latencyMs,
         });
       if (error instanceof TypeError)
         throw new SerpProviderError('UNKNOWN_FAILURE', 'Provider network request failed', false, {
           origin: 'NETWORK',
+          latencyMs,
         });
       throw new SerpProviderError('UNKNOWN_FAILURE', 'Provider request failed', false, {
         origin: 'UNKNOWN',
+        latencyMs,
       });
     }
   }
@@ -552,8 +634,9 @@ export class SerpApiProvider extends HttpProvider {
       );
     }
     const params = object.catch({}).parse(body.search_parameters);
+    const metadata = object.catch({}).parse(body.search_metadata);
     return normalized(this.name, requirement, {
-      requestId: object.catch({}).parse(body.search_metadata).id as string | undefined,
+      requestId: metadata.id as string | undefined,
       providerLocationUsed: params.location_used as string | undefined,
       precision: requirement.requiredPrecision,
       organic: organicList(body.organic_results, 'link'),
@@ -562,6 +645,10 @@ export class SerpApiProvider extends HttpProvider {
       mapPack: body.local_results,
       paa: body.related_questions,
       shopping: body.shopping_results,
+      httpStatus: response.diagnostics.httpStatus,
+      searchStatus: boundedDiagnostic(metadata.status) ?? null,
+      latencyMs: response.latencyMs,
+      responseContentType: response.diagnostics.responseContentType ?? null,
       supported: { ads: true, aiOverview: true, mapPack: true, paa: true, shopping: true },
     });
   }
@@ -601,6 +688,10 @@ export class SerpstackProvider extends HttpProvider {
       mapPack: body.local_results,
       paa: body.questions,
       shopping: body.shopping_results,
+      httpStatus: response.diagnostics.httpStatus,
+      searchStatus: boundedDiagnostic(body.success) ?? null,
+      latencyMs: response.latencyMs,
+      responseContentType: response.diagnostics.responseContentType ?? null,
       supported: { ads: true, aiOverview: false, mapPack: true, paa: true, shopping: true },
     });
   }
@@ -638,6 +729,9 @@ export class SerperProvider extends HttpProvider {
       mapPack: body.places,
       paa: body.peopleAlsoAsk,
       shopping: body.shopping,
+      httpStatus: response.diagnostics.httpStatus,
+      latencyMs: response.latencyMs,
+      responseContentType: response.diagnostics.responseContentType ?? null,
       supported: { ads: true, aiOverview: false, mapPack: true, paa: true, shopping: true },
     });
   }

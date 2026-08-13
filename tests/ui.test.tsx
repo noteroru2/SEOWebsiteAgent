@@ -2,10 +2,12 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   deterministicEvidencePacket,
+  evidenceAutomationPanelForOpportunity,
   evidencePanelForOpportunity,
   evidenceReevaluationStateForOpportunity,
   gscSiteView,
   mapGscProperty,
+  opportunityDetail,
 } from '@seo-agent/database';
 
 vi.mock('@seo-agent/database', () => ({
@@ -360,6 +362,69 @@ describe('server-rendered UI foundations', () => {
     expect(detail).toContain('value="33333333-3333-4333-8333-333333333333"');
     expect(detail).not.toContain('name="requestedLocation"');
     expect(detail).not.toContain('OPENAI_API_KEY=');
+  });
+  it('surfaces the hyperlocal trust boundary and owner/API observation conflict', async () => {
+    const base = await opportunityDetail('11111111-1111-4111-8111-111111111112');
+    vi.mocked(opportunityDetail).mockResolvedValueOnce({
+      ...base,
+      opportunity: { ...base!.opportunity, query: 'รับซื้อโน้ตบุ๊ค ใกล้ฉัน' },
+    } as never);
+    vi.mocked(evidencePanelForOpportunity).mockResolvedValueOnce({
+      completeness: 'READY_FOR_REEVALUATION',
+      requests: [
+        {
+          id: '22222222-2222-4222-8222-222222222222',
+          type: 'MANUAL_SERP_OBSERVATION',
+          requirement: 'Observe the real Ubon result.',
+          reason: 'Hyperlocal context is material.',
+          status: 'RESOLVED',
+          source: 'OWNER',
+          items: [
+            {
+              id: 'owner-serp',
+              sourceType: 'OWNER_OBSERVED_SERP',
+              evidence: { approximatePosition: 2 },
+            },
+          ],
+        },
+      ],
+    } as never);
+    vi.mocked(evidenceAutomationPanelForOpportunity).mockResolvedValueOnce({
+      facts: { siteId: 'site', requirements: [], complete: true },
+      captures: [],
+      apiCaptures: [
+        {
+          id: '88c066e8-27f9-49e8-b651-f0fbf79146cf',
+          request_id: '22222222-2222-4222-8222-222222222222',
+          provider: 'SERPAPI',
+          status: 'REJECTED_FOR_TARGET_CONTEXT',
+          review_policy: 'OWNER_REVIEW_REQUIRED',
+          query: 'รับซื้อโน้ตบุ๊ค ใกล้ฉัน',
+          requested_location: 'Ubon Ratchathani,Ubon Ratchathani,Thailand',
+          provider_location_used: 'Ubon Ratchathani,Thailand',
+          location_precision: 'CITY',
+          device: 'MOBILE',
+          target_found: false,
+          target_organic_position: null,
+          max_organic_results: 20,
+          conflict: true,
+          normalized_result: { features: { mapPack: 'PRESENT' } },
+        },
+      ],
+    } as never);
+    const Detail = (await import('../apps/web/app/opportunities/[id]/page')).default;
+    const html = renderToStaticMarkup(
+      await Detail({
+        params: Promise.resolve({ id: '11111111-1111-4111-8111-111111111112' }),
+      }),
+    );
+    expect(html).toContain('HYPERLOCAL_SERP_REQUIRED');
+    expect(html).toContain('Primary evidence required:');
+    expect(html).toContain('API capture:');
+    expect(html).toContain('SERP_OBSERVATION_CONFLICT');
+    expect(html).toContain('AMPHON ~#2');
+    expect(html).toContain('AMPHON not found Top 20');
+    expect(html).not.toContain('Accept Evidence');
   });
   it('shows a disabled queued state and worker warning for an active evidence re-evaluation', async () => {
     vi.mocked(evidencePanelForOpportunity).mockResolvedValueOnce({

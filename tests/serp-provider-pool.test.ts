@@ -5,12 +5,15 @@ import { randomUUID } from 'node:crypto';
 import {
   capabilityMismatch,
   classifyEvidenceRequirement,
+  classifySerpIntent,
+  materialSerpObservationConflict,
   PROVIDER_CAPABILITIES,
   SerpApiProvider,
   SerpProviderError,
   SerperProvider,
   SerpstackProvider,
   selectProvider,
+  serpEvidenceTrust,
   type NormalizedSerpResult,
   type SerpProvider,
 } from '@seo-agent/serp-providers';
@@ -27,6 +30,7 @@ import {
   persistSerpApiFailure,
   persistSerpApiSuccess,
   rejectSerpApiCapture,
+  rejectSerpApiCaptureForContext,
   reserveSerpProviderAttempt,
   serpProviderStatus,
   storeOwnerEvidence,
@@ -67,6 +71,43 @@ const candidate = (
 });
 
 describe('capability-based free-only routing', () => {
+  it.each(['รับซื้อโน้ตบุ๊ค ใกล้ฉัน', 'ร้านใกล้เคียง', 'laptop near me', 'computer shop nearby'])(
+    'classifies %s as hyperlocal without AI',
+    (query) => {
+      expect(classifySerpIntent({ query })).toBe('HYPERLOCAL');
+      expect(classifyEvidenceRequirement({ query }).evidencePolicy).toBe(
+        'HYPERLOCAL_SERP_REQUIRED',
+      );
+    },
+  );
+  it('classifies a normal query as non-hyperlocal and honors explicit metadata', () => {
+    expect(classifySerpIntent({ query: 'รับซื้อ ram' })).toBe('NORMAL');
+    expect(
+      classifySerpIntent({
+        query: 'รับซื้อ ram',
+        metadata: { serpEvidenceRequirement: 'HYPERLOCAL_SERP_REQUIRED' },
+      }),
+    ).toBe('HYPERLOCAL');
+    expect(
+      classifySerpIntent({
+        query: 'รับซื้อ ram',
+        metadata: { HYPERLOCAL_SERP_REQUIRED: true },
+      }),
+    ).toBe('HYPERLOCAL');
+  });
+  it('ranks owner real-device evidence above API and emulation for hyperlocal intent', () => {
+    expect(serpEvidenceTrust('HYPERLOCAL', 'OWNER_REAL_DEVICE')).toBe('PRIMARY_ELIGIBLE');
+    expect(serpEvidenceTrust('HYPERLOCAL', 'OWNER_CONFIRMED_BROWSER_CAPTURE')).toBe(
+      'PRIMARY_ELIGIBLE',
+    );
+    expect(serpEvidenceTrust('HYPERLOCAL', 'SERP_API_CITY')).toBe('SUPPORTING_ONLY');
+    expect(serpEvidenceTrust('HYPERLOCAL', 'PLAYWRIGHT_EMULATED')).toBe('SUPPORTING_ONLY');
+    expect(serpEvidenceTrust('NORMAL', 'SERP_API_CITY')).toBe('PRIMARY_ELIGIBLE');
+  });
+  it('detects a material owner/API target-not-found disagreement', () => {
+    expect(materialSerpObservationConflict(2, null, false)).toBe(true);
+    expect(materialSerpObservationConflict(2, 3, true)).toBe(false);
+  });
   it('rejects every non-free billing mode', () => {
     expect(assertFreeOnlyMode({ SERP_BILLING_MODE: 'FREE_ONLY' })).toBe('FREE_ONLY');
     expect(() => assertFreeOnlyMode({ SERP_BILLING_MODE: 'PAID' })).toThrow('FREE_ONLY');
@@ -127,7 +168,7 @@ const providerResponse = (provider: 'SERPAPI' | 'SERPSTACK' | 'SERPER') => {
   ];
   if (provider === 'SERPAPI')
     return {
-      search_metadata: { id: 'serpapi-id' },
+      search_metadata: { id: 'serpapi-id', status: 'Success' },
       search_parameters: { location_used: 'Ubon Ratchathani,Thailand' },
       organic_results: organic,
       ads: [{}],
@@ -175,6 +216,9 @@ describe.each([
     expect(result.features.aiOverview).toBe(name === 'SERPAPI' ? 'PRESENT' : 'UNKNOWN');
     expect(result.features.peopleAlsoAsk).toBe('PRESENT');
     expect(result.device).toBe(input.device);
+    expect(result.providerHttpStatus).toBe(200);
+    expect(result.providerLatencyMs).toBeTypeOf('number');
+    if (name === 'SERPAPI') expect(result.providerSearchStatus).toBe('Success');
     expect(JSON.stringify(result)).not.toContain('fixture-key');
     if (name === 'SERPAPI' || name === 'SERPSTACK')
       expect(new URL(requested!.url).searchParams.get('num')).toBe('20');
@@ -1014,6 +1058,9 @@ describe('transactional free quota and evidence integration', () => {
   });
 
   it('makes owner review override LOW_CTR auto-accept until one idempotent explicit acceptance', async () => {
+    await database.pool.query(`UPDATE opportunities SET query='รับซื้อ ram' WHERE id=$1`, [
+      opportunityId,
+    ]);
     await configureSerpProvider(
       {
         provider: 'SERPAPI',
@@ -1057,7 +1104,11 @@ describe('transactional free quota and evidence integration', () => {
     );
     expect(attempt?.capture.review_policy).toBe('OWNER_REVIEW_REQUIRED');
     expect(
-      await persistSerpApiSuccess(queued.capture!.id, normalizedFixture(), database.pool),
+      await persistSerpApiSuccess(
+        queued.capture!.id,
+        { ...normalizedFixture(), query: 'รับซื้อ ram' },
+        database.pool,
+      ),
     ).toEqual({
       accepted: false,
       pendingReview: true,
@@ -1200,6 +1251,9 @@ describe('transactional free quota and evidence integration', () => {
   });
 
   it('success consumes allowance, creates API provenance, hashes evidence, stales V3, and enqueues no AI', async () => {
+    await database.pool.query(`UPDATE opportunities SET query='รับซื้อ ram' WHERE id=$1`, [
+      opportunityId,
+    ]);
     await configureSerpProvider(
       {
         provider: 'SERPAPI',
@@ -1244,7 +1298,7 @@ describe('transactional free quota and evidence integration', () => {
     const result: NormalizedSerpResult = {
       provider: 'SERPAPI',
       providerRequestId: 'fixture',
-      query: requirement.query,
+      query: 'รับซื้อ ram',
       requestedLocation: requirement.requestedLocation,
       providerLocationUsed: 'Ubon Ratchathani,Thailand',
       locationPrecision: 'CITY',
@@ -1404,7 +1458,7 @@ describe('transactional free quota and evidence integration', () => {
 
   it('requires owner review before higher-risk API evidence resolves the request', async () => {
     await database.pool.query(
-      `UPDATE opportunities SET kind='QUERY_PAGE_OVERLAP_CANDIDATE' WHERE id=$1`,
+      `UPDATE opportunities SET kind='QUERY_PAGE_OVERLAP_CANDIDATE',query='รับซื้อ ram' WHERE id=$1`,
       [opportunityId],
     );
     await configureSerpProvider(
@@ -1436,7 +1490,7 @@ describe('transactional free quota and evidence integration', () => {
     const api = {
       provider: 'SERPAPI',
       providerRequestId: null,
-      query: requirement.query,
+      query: 'รับซื้อ ram',
       requestedLocation: requirement.requestedLocation,
       providerLocationUsed: 'Ubon',
       locationPrecision: 'CITY',
@@ -1506,6 +1560,11 @@ describe('transactional free quota and evidence integration', () => {
       },
       database.pool,
     );
+    expect(
+      (await database.pool.query(`SELECT status FROM evidence_requests WHERE id=$1`, [requestId]))
+        .rows[0].status,
+    ).toBe('RESOLVED');
+    const ownerPacket = await deterministicEvidencePacket(opportunityId, database.pool);
     await configureSerpProvider(
       {
         provider: 'SERPAPI',
@@ -1548,22 +1607,61 @@ describe('transactional free quota and evidence integration', () => {
         peopleAlsoAsk: 'UNKNOWN',
         shopping: 'UNKNOWN',
       },
-      targetFound: true,
-      targetOrganicPosition: 2,
-      targetUrl: 'https://amphon.co.th/notebook',
-      targetTitle: 'API',
-      targetSnippet: 'API',
+      targetFound: false,
+      targetOrganicPosition: null,
+      targetUrl: null,
+      targetTitle: null,
+      targetSnippet: null,
     } satisfies NormalizedSerpResult;
     const outcome = await persistSerpApiSuccess(queued.capture!.id, api, database.pool);
-    expect(outcome.conflict).toBe(true);
+    expect(outcome).toMatchObject({ conflict: true, accepted: false, pendingReview: true });
     const rows = await database.pool.query(
       `SELECT source_type FROM evidence_items WHERE request_id=$1 ORDER BY created_at`,
       [requestId],
     );
-    expect(rows.rows.map((row) => row.source_type)).toEqual([
-      'OWNER_OBSERVED_SERP',
-      'SERP_API_CAPTURED',
-    ]);
+    expect(rows.rows.map((row) => row.source_type)).toEqual(['OWNER_OBSERVED_SERP']);
+    expect(await deterministicEvidencePacket(opportunityId, database.pool)).toEqual(ownerPacket);
+    const pending = (
+      await database.pool.query(
+        `SELECT status,intent_class,trust_role,conflict,conflict_detail,normalized_result,
+         provider_request_id FROM serp_api_captures WHERE id=$1`,
+        [queued.capture!.id],
+      )
+    ).rows[0];
+    expect(pending).toMatchObject({
+      status: 'PENDING_REVIEW',
+      intent_class: 'HYPERLOCAL',
+      trust_role: 'SUPPORTING_ONLY',
+      conflict: true,
+      conflict_detail: {
+        type: 'SERP_OBSERVATION_CONFLICT',
+        ownerPositions: [5],
+        providerTargetState: 'TARGET_NOT_FOUND_TOP_20',
+      },
+    });
+    expect(pending.normalized_result.features).toEqual(api.features);
+    await expect(acceptSerpApiCapture(queued.capture!.id, database.pool)).rejects.toThrow(
+      'supporting evidence only',
+    );
+    const rejected = await rejectSerpApiCaptureForContext(
+      queued.capture!.id,
+      'HYPERLOCAL_CONTEXT_DISAGREEMENT',
+      database.pool,
+    );
+    expect(rejected).toMatchObject({
+      status: 'REJECTED_FOR_TARGET_CONTEXT',
+      rejection_reason: 'HYPERLOCAL_CONTEXT_DISAGREEMENT',
+      normalized_result: { features: api.features },
+    });
+    expect(await deterministicEvidencePacket(opportunityId, database.pool)).toEqual(ownerPacket);
+    expect((await database.pool.query(`SELECT count(*)::int n FROM ai_usage`)).rows[0].n).toBe(0);
+    expect(
+      (
+        await database.pool.query(
+          `SELECT count(*)::int n FROM jobs WHERE type IN ('AI_SOURCE_PLAN','EVIDENCE_REEVALUATION')`,
+        )
+      ).rows[0].n,
+    ).toBe(0);
   });
 
   it('invalidates a corrupted pending capture without changing evidence identity or V3 state', async () => {

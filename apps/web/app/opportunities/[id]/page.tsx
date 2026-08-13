@@ -30,6 +30,7 @@ import {
 } from '../../actions';
 import { EvidenceReevaluationControl } from './evidence-reevaluation-control';
 import { RealBrowserCaptureTool } from './real-browser-capture-tool';
+import { classifySerpIntent } from '@seo-agent/serp-providers';
 
 export const dynamic = 'force-dynamic';
 export default async function OpportunityDetailPage({
@@ -173,6 +174,7 @@ function EvidenceRequiredPanel({
   const latestJob = reevaluation.latestJob as Record<string, unknown> | null;
   const latestV3 = reevaluation.latestV3 as Record<string, unknown> | null;
   const currentV3 = currentEvidenceV3(latestV3, evidencePacketHash);
+  const serpIntent = classifySerpIntent({ query });
   const completedEvidencePacketHash = currentV3 ? String(currentV3.evidence_packet_hash) : null;
   const initialState: EvidenceReevaluationActionState = reevaluation.activeJob
     ? {
@@ -210,6 +212,22 @@ function EvidenceRequiredPanel({
         Completeness: {evidence.completeness}. Adding evidence stores an auditable fact only.
         Re-evaluation is a separate owner action.
       </p>
+      {serpIntent === 'HYPERLOCAL' ? (
+        <div className="notice">
+          <strong>SERP Evidence Quality</strong>
+          <p>Hyperlocal query detected · HYPERLOCAL_SERP_REQUIRED</p>
+          <p>
+            <strong>Primary evidence required:</strong> Real Device / Owner Browser
+          </p>
+          <p>
+            <strong>API capture:</strong> Supporting only
+          </p>
+          <p className="hint">
+            City API or emulated-browser observations cannot establish local ownership or authorize
+            site changes by themselves.
+          </p>
+        </div>
+      ) : null}
       <div className="actions">
         <form action={refreshInternalEvidenceAction.bind(null, opportunityId)}>
           <button>Refresh Internal Evidence</button>
@@ -246,6 +264,17 @@ function EvidenceRequiredPanel({
           );
           const machine = (latestCapture?.machine_capture ?? {}) as Record<string, unknown>;
           const features = (machine.features ?? {}) as Record<string, unknown>;
+          const ownerSerpItems = (request.items ?? []).filter((item: Record<string, unknown>) =>
+            ['OWNER_OBSERVED_SERP', 'OWNER_CONFIRMED_BROWSER_CAPTURE'].includes(
+              String(item.sourceType),
+            ),
+          );
+          const ownerPositions = ownerSerpItems.flatMap((item: Record<string, unknown>) => {
+            const position = Number(
+              (item.evidence as Record<string, unknown>)?.approximatePosition,
+            );
+            return Number.isFinite(position) ? [position] : [];
+          });
           return (
             <article className="panel compact section" key={request.id}>
               <strong>
@@ -261,6 +290,9 @@ function EvidenceRequiredPanel({
                   <p className="hint">
                     Required: City · Mobile. Fetching uses one owner-authorized internal free
                     allowance. Opening this page never consumes provider quota.
+                    {serpIntent === 'HYPERLOCAL'
+                      ? ' Use real-device owner evidence first; this API capture is supporting only.'
+                      : ''}
                   </p>
                   {location ? (
                     <div className="grid">
@@ -308,7 +340,11 @@ function EvidenceRequiredPanel({
                         <option value="TABLET">Tablet</option>
                       </select>
                     </label>
-                    <button disabled={!location}>Fetch SERP Evidence</button>
+                    <button disabled={!location}>
+                      {serpIntent === 'HYPERLOCAL'
+                        ? 'Fetch Supporting API Evidence'
+                        : 'Fetch SERP Evidence'}
+                    </button>
                   </form>
                   <h3>Automated Browser SERP capture</h3>
                   <p className="hint">
@@ -409,7 +445,11 @@ function EvidenceRequiredPanel({
                       </select>
                     </label>
                     <input type="hidden" name="device" value="MOBILE" />
-                    <button disabled={!location}>Fetch Fresh SERP Evidence · City · Mobile</button>
+                    <button disabled={!location}>
+                      {serpIntent === 'HYPERLOCAL'
+                        ? 'Fetch Fresh Supporting API Evidence · City · Mobile'
+                        : 'Fetch Fresh SERP Evidence · City · Mobile'}
+                    </button>
                   </form>
                 </details>
               ) : null}
@@ -471,7 +511,23 @@ function EvidenceRequiredPanel({
                   </pre>
                   {latestApiCapture.conflict ? (
                     <div className="notice danger-text">
-                      SERP_OBSERVATION_CONFLICT — owner and API observations are both preserved.
+                      <strong>⚠ SERP observation conflict</strong>
+                      <p>SERP_OBSERVATION_CONFLICT — both observations are preserved.</p>
+                      <p>
+                        <strong>Owner real-device:</strong>{' '}
+                        {ownerPositions.length
+                          ? `AMPHON ~#${ownerPositions.join(' / ~#')}`
+                          : `AMPHON ~#${String(
+                              (latestApiCapture.conflict_detail as Record<string, unknown> | null)
+                                ?.ownerRealMobilePosition ?? 'UNKNOWN',
+                            )}`}
+                      </p>
+                      <p>
+                        <strong>API City {String(latestApiCapture.device)}:</strong>{' '}
+                        {latestApiCapture.target_found
+                          ? `AMPHON #${String(latestApiCapture.target_organic_position)}`
+                          : `AMPHON not found Top ${String(latestApiCapture.max_organic_results)}`}
+                      </p>
                     </div>
                   ) : null}
                   {!latestApiCapture.normalized_result && latestApiCapture.failure_code ? (
@@ -482,15 +538,21 @@ function EvidenceRequiredPanel({
                   ) : null}
                   {latestApiCapture.status === 'PENDING_REVIEW' ? (
                     <>
-                      <form
-                        action={acceptSerpApiCaptureAction.bind(
-                          null,
-                          opportunityId,
-                          String(latestApiCapture.id),
-                        )}
-                      >
-                        <button>Accept Evidence</button>
-                      </form>
+                      {serpIntent !== 'HYPERLOCAL' ? (
+                        <form
+                          action={acceptSerpApiCaptureAction.bind(
+                            null,
+                            opportunityId,
+                            String(latestApiCapture.id),
+                          )}
+                        >
+                          <button>Accept Evidence</button>
+                        </form>
+                      ) : (
+                        <p className="notice">
+                          Hyperlocal API evidence cannot be accepted as primary.
+                        </p>
+                      )}
                       <form
                         action={rejectSerpApiCaptureAction.bind(
                           null,
@@ -799,6 +861,8 @@ function safeJobFailure(job: Record<string, unknown>) {
 
 function apiCaptureStatusLabel(capture: Record<string, unknown>) {
   if (capture.status === 'PENDING_REVIEW') return 'Captured — Review Required';
+  if (capture.status === 'REJECTED_FOR_TARGET_CONTEXT')
+    return 'Rejected for target context — retained as supporting evidence';
   if (capture.status === 'FAILED') return 'Provider unavailable — Owner action required';
   if (capture.status === 'CAPABILITY_MISMATCH')
     return 'Provider capability mismatch — Owner action required';

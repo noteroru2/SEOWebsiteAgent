@@ -2,6 +2,9 @@ import type { Pool, PoolClient } from 'pg';
 import {
   capabilityMismatch,
   classifyEvidenceRequirement,
+  classifySerpIntent,
+  materialSerpObservationConflict,
+  serpEvidenceTrust,
   selectProvider,
   type NormalizedSerpResult,
   type ProviderName,
@@ -183,7 +186,7 @@ export async function enqueueSerpApiCapture(
   pool: Pool = getDatabase().pool,
 ) {
   const selected = await pool.query(
-    `SELECT r.type,o.site_id,o.query,s.url FROM evidence_requests r
+    `SELECT r.type,o.site_id,o.query,o.evidence opportunity_evidence,s.url FROM evidence_requests r
      JOIN opportunities o ON o.id=r.opportunity_id JOIN sites s ON s.id=o.site_id
      WHERE r.id=$1 AND r.opportunity_id=$2`,
     [input.requestId, input.opportunityId],
@@ -207,6 +210,7 @@ export async function enqueueSerpApiCapture(
     device: input.device,
     targetDomain,
     maxOrganicResults: input.maxOrganicResults,
+    metadata: (row.opportunity_evidence ?? {}) as Record<string, unknown>,
   });
   assertVerifiedLocation(requirement, location, profile.status);
   const reviewPolicy = input.reviewPolicy ?? 'AUTO_ACCEPT_IF_POLICY_ALLOWS';
@@ -243,8 +247,9 @@ export async function enqueueSerpApiCapture(
       `INSERT INTO serp_api_captures(site_id,opportunity_id,request_id,provider,request_fingerprint,
        query,requested_location,required_precision,device,target_domain,max_organic_results,review_policy,
        location_profile_id,requested_location_label,canonical_provider_location,provider_location_id,
-       verified_precision,country_code,location_timezone,location_verified_at,location_verification_source)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING *`,
+       verified_precision,country_code,location_timezone,location_verified_at,location_verification_source,
+       intent_class,trust_role)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING *`,
       [
         row.site_id,
         input.opportunityId,
@@ -267,6 +272,11 @@ export async function enqueueSerpApiCapture(
         location.timezone,
         location.verifiedAt,
         location.verificationSource,
+        requirement.intentClass,
+        serpEvidenceTrust(
+          requirement.intentClass ?? 'NORMAL',
+          requirement.requiredPrecision === 'CITY' ? 'SERP_API_CITY' : 'SERP_API_COUNTRY',
+        ),
       ],
     );
     const job = await client.query(
@@ -338,6 +348,9 @@ export async function reserveSerpProviderAttempt(
       device: capture.device,
       targetDomain: capture.target_domain,
       maxOrganicResults: capture.max_organic_results,
+      intentClass:
+        (capture.intent_class as SerpEvidenceRequirement['intentClass']) ??
+        classifySerpIntent({ query: String(capture.query) }),
     };
     const snapshot: VerifiedSerpLocationSnapshot = {
       locationProfileId: String(capture.location_profile_id ?? ''),
@@ -528,21 +541,32 @@ export async function persistSerpApiSuccess(
         [capture.request_id],
       )
     ).rows;
-    const conflict = owner.some((row: { evidence?: Record<string, unknown> }) => {
+    const ownerPositions = owner.flatMap((row: { evidence?: Record<string, unknown> }) => {
       const position = Number(row.evidence?.approximatePosition);
-      return (
-        Number.isFinite(position) &&
-        result.targetOrganicPosition !== null &&
-        position !== result.targetOrganicPosition
-      );
+      return Number.isFinite(position) ? [position] : [];
     });
+    const conflict = ownerPositions.some((position) =>
+      materialSerpObservationConflict(position, result.targetOrganicPosition, result.targetFound),
+    );
+    const intentClass =
+      capture.intent_class === 'HYPERLOCAL' ||
+      classifySerpIntent({ query: String(capture.query) }) === 'HYPERLOCAL'
+        ? 'HYPERLOCAL'
+        : 'NORMAL';
+    const trustRole = serpEvidenceTrust(
+      intentClass,
+      result.locationPrecision === 'CITY' ? 'SERP_API_CITY' : 'SERP_API_COUNTRY',
+    );
     const evidence = {
       ...result,
       provenance: 'SERP_API_CAPTURED',
       evidenceQuality: result.locationPrecision === 'CITY' ? 'SERP_API_CITY' : 'SERP_API_COUNTRY',
       conflict: conflict ? 'SERP_OBSERVATION_CONFLICT' : null,
+      intentClass,
+      trustRole,
     };
     const autoAccepted =
+      intentClass !== 'HYPERLOCAL' &&
       capture.review_policy !== 'OWNER_REVIEW_REQUIRED' &&
       autoAcceptOpportunityKinds.has(String(capture.opportunity_kind));
     if (autoAccepted) {
@@ -564,7 +588,9 @@ export async function persistSerpApiSuccess(
       provider_request_id=$3,provider_location_used=$4,location_precision=$5,target_found=$6,
       target_organic_position=$7,target_url=$8,target_title=$9,target_snippet=$10,evidence_quality=$11,
       conflict=$12,captured_at=$13::timestamptz,
-      expires_at=$13::timestamptz+($14::int*interval '1 hour'),updated_at=now() WHERE id=$1`,
+      expires_at=$13::timestamptz+($14::int*interval '1 hour'),intent_class=$16,trust_role=$17,
+      conflict_detail=$18::jsonb,provider_http_status=$19,provider_search_status=$20,
+      provider_latency_ms=$21,provider_response_content_type=$22,updated_at=now() WHERE id=$1`,
       [
         captureId,
         JSON.stringify(evidence),
@@ -581,6 +607,22 @@ export async function persistSerpApiSuccess(
         result.capturedAt,
         DEFAULT_SERP_FRESHNESS_HOURS,
         autoAccepted ? 'ACCEPTED' : 'PENDING_REVIEW',
+        intentClass,
+        trustRole,
+        conflict
+          ? JSON.stringify({
+              type: 'SERP_OBSERVATION_CONFLICT',
+              ownerPositions,
+              providerTargetState: result.targetFound
+                ? `POSITION_${result.targetOrganicPosition}`
+                : `TARGET_NOT_FOUND_TOP_${capture.max_organic_results}`,
+              policyVersion: 'hyperlocal-serp-trust-v1',
+            })
+          : null,
+        result.providerHttpStatus ?? null,
+        result.providerSearchStatus ?? null,
+        result.providerLatencyMs ?? null,
+        result.providerResponseContentType ?? null,
       ],
     );
     await client.query(
@@ -613,6 +655,8 @@ export async function acceptSerpApiCapture(captureId: string, pool: Pool = getDa
       await client.query('COMMIT');
       return { ...capture, idempotent: true };
     }
+    if (capture?.intent_class === 'HYPERLOCAL' || capture?.trust_role === 'SUPPORTING_ONLY')
+      throw new Error('Hyperlocal SERP API captures are supporting evidence only');
     if (!capture?.normalized_result) throw new Error('Reviewable SERP API capture required');
     const result = capture.normalized_result as NormalizedSerpResult;
     await recordEvidenceItem(
@@ -693,6 +737,7 @@ export async function persistSerpApiFailure(
       responseContentType: diagnostics.responseContentType ?? null,
       providerRequestId: diagnostics.providerRequestId ?? null,
       providerStatus: diagnostics.providerStatus ?? null,
+      latencyMs: diagnostics.latencyMs ?? null,
       occurredAt: new Date().toISOString(),
     };
     await client.query(
@@ -707,7 +752,8 @@ export async function persistSerpApiFailure(
        failure_origin=$5,failure_http_status=$6,failure_provider_code=$7,
        failure_content_type=$8,failure_provider_status=$9,
        provider_request_id=coalesce(provider_request_id,$10),
-       failure_history=failure_history || $11::jsonb,updated_at=now() WHERE id=$1`,
+       failure_history=failure_history || $11::jsonb,failure_latency_ms=$12,
+       updated_at=now() WHERE id=$1`,
       [
         input.captureId,
         captureStatus,
@@ -720,6 +766,7 @@ export async function persistSerpApiFailure(
         diagnostics.providerStatus?.slice(0, 120) ?? null,
         diagnostics.providerRequestId?.slice(0, 120) ?? null,
         JSON.stringify([history]),
+        diagnostics.latencyMs ?? null,
       ],
     );
     await client.query('COMMIT');
@@ -738,6 +785,39 @@ export async function rejectSerpApiCapture(captureId: string, pool: Pool = getDa
   );
   if (!row.rows[0]) throw new Error('Reviewable API capture required');
   return row.rows[0];
+}
+
+export async function rejectSerpApiCaptureForContext(
+  captureId: string,
+  reason = 'HYPERLOCAL_CONTEXT_DISAGREEMENT',
+  pool: Pool = getDatabase().pool,
+) {
+  if (!/^[A-Z0-9_]{3,80}$/.test(reason)) throw new Error('Safe context rejection reason required');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const row = await client.query(
+      `UPDATE serp_api_captures SET status='REJECTED_FOR_TARGET_CONTEXT',failure_code=$2,
+       failure_summary='Provider-context observation retained as supporting evidence only',
+       rejection_reason=$2,intent_class='HYPERLOCAL',trust_role='SUPPORTING_ONLY',updated_at=now()
+       WHERE id=$1 AND status='PENDING_REVIEW' AND normalized_result IS NOT NULL RETURNING *`,
+      [captureId, reason],
+    );
+    if (!row.rows[0]) throw new Error('Pending hyperlocal API capture required');
+    await client.query(
+      `INSERT INTO system_events(source,level,event,detail)
+       VALUES('serp-trust-policy','INFO','SERP_CAPTURE_CONTEXT_REJECTED',
+       jsonb_build_object('captureId',$1::text,'reason',$2::text))`,
+      [captureId, reason],
+    );
+    await client.query('COMMIT');
+    return row.rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function invalidateSerpApiCapture(

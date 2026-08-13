@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
 import {
+  capabilityMismatch,
   classifyEvidenceRequirement,
   selectProvider,
   type NormalizedSerpResult,
@@ -8,6 +9,7 @@ import {
   type SerpEvidenceRequirement,
   type SerpProviderCapabilities,
   type SerpReviewPolicy,
+  type SerpFailureDiagnostics,
   type VerifiedSerpLocationSnapshot,
 } from '@seo-agent/serp-providers';
 import { evidenceHash, recordEvidenceItem } from './evidence-resolution';
@@ -93,15 +95,25 @@ export async function serpProviderStatus(
        ORDER BY p.period_start DESC LIMIT 1
      ) p ON true ORDER BY c.priority`,
   );
-  return result.rows.map((row) => ({
-    ...row,
-    credential_configured: configured[row.provider as ProviderName],
-    effective_health: !configured[row.provider as ProviderName]
+  return result.rows.map((row) => {
+    const credentialConfigured = configured[row.provider as ProviderName];
+    const effectiveHealth = !credentialConfigured
       ? 'NOT_CONFIGURED'
       : !row.period_id || Number(row.remaining) <= 0
         ? 'FREE_QUOTA_EXHAUSTED'
-        : row.health,
-  }));
+        : row.health;
+    return {
+      ...row,
+      credential_configured: credentialConfigured,
+      effective_health: effectiveHealth,
+      selection_eligible:
+        row.enabled &&
+        credentialConfigured &&
+        effectiveHealth === 'AVAILABLE' &&
+        Number(row.remaining) > 0 &&
+        (!row.cooldown_until || new Date(row.cooldown_until).getTime() <= Date.now()),
+    };
+  });
 }
 
 export async function configureSerpProvider(
@@ -123,7 +135,8 @@ export async function configureSerpProvider(
     await client.query('BEGIN');
     const config = await client.query(
       `UPDATE serp_provider_configs SET enabled=$2,configured_allowance=$3,health='AVAILABLE',
-       last_error_category=NULL,updated_at=now() WHERE provider=$1 RETURNING *`,
+       last_error_category=NULL,consecutive_failures=0,cooldown_until=NULL,updated_at=now()
+       WHERE provider=$1 RETURNING *`,
       [input.provider, input.enabled, input.configuredAllowance],
     );
     if (!config.rows[0]) throw new Error('Unknown SERP provider');
@@ -369,9 +382,9 @@ export async function reserveSerpProviderAttempt(
        WHERE p.provider=c.provider AND p.period_start<=now() AND (p.period_end IS NULL OR p.period_end>now())
        ORDER BY p.period_start DESC LIMIT 1) p ON true ORDER BY c.priority FOR UPDATE OF c`,
     );
-    const provider = selectProvider(
-      requirement,
-      rows.rows.map((item) => ({
+    const candidates = rows.rows
+      .filter((item) => item.provider === snapshot.provider)
+      .map((item) => ({
         provider: item.provider,
         enabled: item.enabled,
         configured: configured[item.provider as ProviderName],
@@ -379,12 +392,49 @@ export async function reserveSerpProviderAttempt(
         remaining: Number(item.remaining ?? 0),
         priority: item.priority,
         capabilities: item.capabilities,
-      })),
-    );
+      }));
+    const provider = selectProvider(requirement, candidates);
     if (!provider) {
+      const candidate = candidates[0];
+      const mismatch = candidate ? capabilityMismatch(candidate.capabilities, requirement) : null;
+      const failure = mismatch
+        ? {
+            status: 'CAPABILITY_MISMATCH',
+            code: 'CAPABILITY_MISMATCH',
+            summary: `Provider capability mismatch: ${mismatch}`,
+            origin: 'REQUEST',
+          }
+        : candidate?.health === 'FREE_QUOTA_EXHAUSTED' || Number(candidate?.remaining ?? 0) <= 0
+          ? {
+              status: 'FREE_QUOTA_EXHAUSTED',
+              code: 'FREE_QUOTA_EXHAUSTED',
+              summary: 'No owner-authorized free provider allowance remains',
+              origin: 'PROVIDER',
+            }
+          : candidate?.health === 'AUTH_FAILED'
+            ? {
+                status: 'AUTH_FAILED',
+                code: 'AUTH_FAILED',
+                summary: 'Provider authentication requires owner action',
+                origin: 'PROVIDER',
+              }
+            : candidate?.health === 'RATE_LIMITED'
+              ? {
+                  status: 'RATE_LIMITED',
+                  code: 'RATE_LIMITED',
+                  summary: 'Provider is rate limited; owner action required',
+                  origin: 'PROVIDER',
+                }
+              : {
+                  status: 'FAILED',
+                  code: candidate?.health ?? 'NO_PROVIDER_CONFIGURED',
+                  summary: 'No eligible provider is available; owner action required',
+                  origin: 'UNKNOWN',
+                };
       await client.query(
-        `UPDATE serp_api_captures SET status='CAPABILITY_MISMATCH',failure_code='NO_FREE_PROVIDER',failure_summary='Use owner browser capture',updated_at=now() WHERE id=$1`,
-        [captureId],
+        `UPDATE serp_api_captures SET status=$2,failure_code=$3,failure_summary=$4,
+         failure_origin=$5,updated_at=now() WHERE id=$1`,
+        [captureId, failure.status, failure.code, failure.summary, failure.origin],
       );
       await client.query('COMMIT');
       return null;
@@ -534,7 +584,8 @@ export async function persistSerpApiSuccess(
       ],
     );
     await client.query(
-      `UPDATE serp_provider_configs SET health='AVAILABLE',last_success_at=now(),last_error_category=NULL,updated_at=now() WHERE provider=$1`,
+      `UPDATE serp_provider_configs SET health='AVAILABLE',last_success_at=now(),last_error_category=NULL,
+       consecutive_failures=0,cooldown_until=NULL,updated_at=now() WHERE provider=$1`,
       [result.provider],
     );
     if (autoAccepted) await staleV3(capture.opportunity_id, client);
@@ -604,6 +655,7 @@ export async function persistSerpApiFailure(
     category: string;
     summary: string;
     provenNonCounted?: boolean;
+    diagnostics?: SerpFailureDiagnostics;
   },
   pool: Pool = getDatabase().pool,
 ) {
@@ -618,14 +670,57 @@ export async function persistSerpApiFailure(
           ? 'AUTH_FAILED'
           : input.category === 'RATE_LIMITED'
             ? 'RATE_LIMITED'
-            : 'TEMPORARILY_UNAVAILABLE';
+            : input.category === 'CAPABILITY_MISMATCH'
+              ? 'CAPABILITY_MISMATCH'
+              : 'TEMPORARILY_UNAVAILABLE';
+    const captureStatus =
+      input.category === 'FREE_QUOTA_EXHAUSTED'
+        ? 'FREE_QUOTA_EXHAUSTED'
+        : input.category === 'AUTH_FAILED'
+          ? 'AUTH_FAILED'
+          : input.category === 'RATE_LIMITED'
+            ? 'RATE_LIMITED'
+            : input.category === 'CAPABILITY_MISMATCH'
+              ? 'CAPABILITY_MISMATCH'
+              : 'FAILED';
+    const diagnostics = input.diagnostics ?? { origin: 'UNKNOWN' as const };
+    const history = {
+      provider: input.provider,
+      category: input.category,
+      origin: diagnostics.origin,
+      httpStatus: diagnostics.httpStatus ?? null,
+      providerCode: diagnostics.providerCode ?? null,
+      responseContentType: diagnostics.responseContentType ?? null,
+      providerRequestId: diagnostics.providerRequestId ?? null,
+      providerStatus: diagnostics.providerStatus ?? null,
+      occurredAt: new Date().toISOString(),
+    };
     await client.query(
-      `UPDATE serp_provider_configs SET health=$2,last_failure_at=now(),last_error_category=$3,updated_at=now() WHERE provider=$1`,
+      `UPDATE serp_provider_configs SET health=$2,last_failure_at=now(),last_error_category=$3,
+       consecutive_failures=consecutive_failures+1,
+       cooldown_until=CASE WHEN $3 IN ('TEMPORARILY_UNAVAILABLE','NETWORK_TIMEOUT','PROVIDER_ERROR','UNKNOWN_FAILURE','MALFORMED_RESPONSE')
+         THEN now()+interval '15 minutes' ELSE NULL END,updated_at=now() WHERE provider=$1`,
       [input.provider, health, input.category],
     );
     await client.query(
-      `UPDATE serp_api_captures SET status='QUEUED',failure_code=$2,failure_summary=$3,updated_at=now() WHERE id=$1`,
-      [input.captureId, input.category, input.summary.slice(0, 300)],
+      `UPDATE serp_api_captures SET status=$2,failure_code=$3,failure_summary=$4,
+       failure_origin=$5,failure_http_status=$6,failure_provider_code=$7,
+       failure_content_type=$8,failure_provider_status=$9,
+       provider_request_id=coalesce(provider_request_id,$10),
+       failure_history=failure_history || $11::jsonb,updated_at=now() WHERE id=$1`,
+      [
+        input.captureId,
+        captureStatus,
+        input.category,
+        input.summary.slice(0, 300),
+        diagnostics.origin,
+        diagnostics.httpStatus ?? null,
+        diagnostics.providerCode?.slice(0, 120) ?? null,
+        diagnostics.responseContentType?.slice(0, 120) ?? null,
+        diagnostics.providerStatus?.slice(0, 120) ?? null,
+        diagnostics.providerRequestId?.slice(0, 120) ?? null,
+        JSON.stringify([history]),
+      ],
     );
     await client.query('COMMIT');
   } catch (error) {

@@ -60,6 +60,16 @@ export default async function SerpProvidersPage() {
             <p>
               <strong>Last error:</strong> {provider.last_error_category ?? '—'}
             </p>
+            <p>
+              <strong>Consecutive failures:</strong> {provider.consecutive_failures}
+            </p>
+            <p>
+              <strong>Cooldown:</strong>{' '}
+              {provider.cooldown_until ? new Date(provider.cooldown_until).toLocaleString() : '—'}
+            </p>
+            <p>
+              <strong>Eligible for selection:</strong> {provider.selection_eligible ? 'YES' : 'NO'}
+            </p>
           </div>
           <details>
             <summary>Owner configuration</summary>

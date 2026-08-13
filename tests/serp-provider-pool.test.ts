@@ -7,10 +7,12 @@ import {
   classifyEvidenceRequirement,
   PROVIDER_CAPABILITIES,
   SerpApiProvider,
+  SerpProviderError,
   SerperProvider,
   SerpstackProvider,
   selectProvider,
   type NormalizedSerpResult,
+  type SerpProvider,
 } from '@seo-agent/serp-providers';
 import {
   configureSerpProvider,
@@ -29,6 +31,8 @@ import {
   serpProviderStatus,
   storeOwnerEvidence,
 } from '@seo-agent/database';
+import { ResourceGuard } from '@seo-agent/resource-guard';
+import { executeOne } from '../apps/worker/src/runner';
 import { requireTestDatabaseUrl, resetTestDatabase } from '../packages/database/src/test-safety';
 
 const requirement = classifyEvidenceRequirement({
@@ -241,13 +245,32 @@ describe.each([
     expect(result.features.aiOverview).toBe(name === 'SERPAPI' ? 'PRESENT' : 'UNKNOWN');
   });
 
-  it('classifies a provider timeout as temporarily unavailable', async () => {
+  it('classifies a provider timeout as a network timeout', async () => {
     const adapter = new Adapter('fixture-key', (async () => {
       throw new DOMException('fixture timeout', 'AbortError');
     }) as typeof fetch);
     await expect(adapter.search(requirement, AbortSignal.timeout(1_000))).rejects.toMatchObject({
-      category: 'TEMPORARILY_UNAVAILABLE',
+      category: 'NETWORK_TIMEOUT',
       message: 'Provider request timed out',
+      diagnostics: { origin: 'NETWORK' },
+    });
+  });
+
+  it.each([
+    [400, 'INVALID_REQUEST'],
+    [500, 'TEMPORARILY_UNAVAILABLE'],
+  ] as const)('keeps HTTP %s structurally distinct as %s', async (status, category) => {
+    const adapter = new Adapter(
+      'fixture-key',
+      (async () =>
+        new Response(JSON.stringify({ error: 'invalid location parameter' }), {
+          status,
+          headers: { 'content-type': 'application/json' },
+        })) as typeof fetch,
+    );
+    await expect(adapter.search(requirement, AbortSignal.timeout(1_000))).rejects.toMatchObject({
+      category,
+      diagnostics: { origin: 'PROVIDER', httpStatus: status },
     });
   });
 });
@@ -321,6 +344,17 @@ describe('SerpApi Unicode HTTP transport', () => {
 });
 
 const database = createDatabase(requireTestDatabaseUrl());
+const workerGuard = new ResourceGuard(
+  {},
+  {
+    collect: async () => ({
+      freeMemoryMb: 2_000,
+      freeDiskMb: 10_000,
+      loadPerCpu: 0,
+      platform: 'linux',
+    }),
+  },
+);
 let siteId = '';
 let opportunityId = '';
 let requestId = '';
@@ -412,7 +446,11 @@ async function seedLocationProfile(
 }
 
 describe('transactional free quota and evidence integration', () => {
-  beforeAll(async () => migrate(database.db, { migrationsFolder: 'packages/database/migrations' }));
+  const originalSerpApiKey = process.env.SERPAPI_API_KEY;
+  beforeAll(async () => {
+    process.env.SERPAPI_API_KEY = 'fixture-key';
+    await migrate(database.db, { migrationsFolder: 'packages/database/migrations' });
+  });
   beforeEach(async () => {
     await resetTestDatabase(database.pool);
     await seedProviderConfigs();
@@ -424,7 +462,11 @@ describe('transactional free quota and evidence integration', () => {
     });
     ({ opportunityId, requestId } = await setupOpportunity());
   });
-  afterAll(async () => database.pool.end());
+  afterAll(async () => {
+    if (originalSerpApiKey === undefined) delete process.env.SERPAPI_API_KEY;
+    else process.env.SERPAPI_API_KEY = originalSerpApiKey;
+    await database.pool.end();
+  });
 
   it('does not queue a call at zero allowance and returns owner-browser fallback', async () => {
     const outcome = await enqueueSerpApiCapture(
@@ -442,6 +484,250 @@ describe('transactional free quota and evidence integration', () => {
       (await database.pool.query(`SELECT count(*)::int n FROM jobs WHERE type='FETCH_SERP_API'`))
         .rows[0].n,
     ).toBe(0);
+  });
+
+  it('marks a job successful only when a normalized provider capture is produced', async () => {
+    await configureSerpProvider(
+      {
+        provider: 'SERPAPI',
+        enabled: true,
+        configuredAllowance: 1,
+        periodStart: new Date('2026-08-01T00:00:00Z'),
+        periodEnd: new Date('2026-09-01T00:00:00Z'),
+      },
+      database.pool,
+    );
+    const queued = await enqueueSerpApiCapture(
+      {
+        opportunityId,
+        requestId,
+        locationProfileId,
+        device: 'MOBILE',
+        reviewPolicy: 'OWNER_REVIEW_REQUIRED',
+      },
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    const provider: SerpProvider = {
+      name: 'SERPAPI',
+      capabilities: PROVIDER_CAPABILITIES.SERPAPI,
+      search: async () => normalizedFixture(),
+    };
+    const outcome = await executeOne(
+      'serp-success-worker',
+      database.pool,
+      workerGuard,
+      undefined,
+      undefined,
+      undefined,
+      () => provider,
+    );
+    expect(outcome.state).toBe('SUCCEEDED');
+    expect(
+      (await database.pool.query(`SELECT status FROM jobs WHERE id=$1`, [queued.capture!.job_id]))
+        .rows[0].status,
+    ).toBe('SUCCEEDED');
+    expect(
+      (
+        await database.pool.query(
+          `SELECT status,normalized_result FROM serp_api_captures WHERE id=$1`,
+          [queued.capture!.id],
+        )
+      ).rows[0],
+    ).toMatchObject({ status: 'PENDING_REVIEW', normalized_result: { provider: 'SERPAPI' } });
+  });
+
+  it('retains a temporary provider failure, requires owner action, and never retries or creates evidence', async () => {
+    await configureSerpProvider(
+      {
+        provider: 'SERPAPI',
+        enabled: true,
+        configuredAllowance: 1,
+        periodStart: new Date('2026-08-01T00:00:00Z'),
+        periodEnd: new Date('2026-09-01T00:00:00Z'),
+      },
+      database.pool,
+    );
+    const repository = await database.pool.query(
+      `INSERT INTO site_repositories(site_id,local_path) VALUES($1,'C:/failure-semantics-fixture') RETURNING id`,
+      [siteId],
+    );
+    const run = await database.pool.query(
+      `INSERT INTO source_plan_runs(site_id,opportunity_id,repository_id,status,model,reasoning_effort,prompt_version,schema_version,repository_head_sha,source_evidence_hash,finished_at)
+       VALUES($1,$2,$3,'SUCCEEDED','fixture-model','medium','source-change-plan-prompt-v3','fixture-schema','fixture-head','fixture-evidence',now()) RETURNING id`,
+      [siteId, opportunityId, repository.rows[0].id],
+    );
+    const plan = await database.pool.query(
+      `INSERT INTO source_change_plans(run_id,site_id,opportunity_id,verdict,confidence,batch5_reconciliation,summary,structured_output,status)
+       VALUES($1,$2,$3,'NEEDS_MORE_EVIDENCE','MEDIUM','REFINED','Historical','{}','READY_FOR_REVIEW') RETURNING id`,
+      [run.rows[0].id, siteId, opportunityId],
+    );
+    const packetBefore = await deterministicEvidencePacket(opportunityId, database.pool);
+    const queued = await enqueueSerpApiCapture(
+      {
+        opportunityId,
+        requestId,
+        locationProfileId,
+        device: 'MOBILE',
+        reviewPolicy: 'OWNER_REVIEW_REQUIRED',
+      },
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    const selectedProviders: string[] = [];
+    let calls = 0;
+    const providerFactory = (name: 'SERPAPI' | 'SERPSTACK' | 'SERPER'): SerpProvider => {
+      selectedProviders.push(name);
+      return {
+        name,
+        capabilities: PROVIDER_CAPABILITIES[name],
+        search: async () => {
+          calls += 1;
+          throw new SerpProviderError(
+            'TEMPORARILY_UNAVAILABLE',
+            'Provider temporarily unavailable',
+            false,
+            {
+              origin: 'PROVIDER',
+              httpStatus: 503,
+              responseContentType: 'application/json',
+              providerRequestId: 'fixture-request-id',
+              providerStatus: 'Error',
+            },
+          );
+        },
+      };
+    };
+    const outcome = await executeOne(
+      'serp-failure-worker',
+      database.pool,
+      workerGuard,
+      undefined,
+      undefined,
+      undefined,
+      providerFactory,
+    );
+    expect(outcome.state).toBe('FAILED');
+    expect(calls).toBe(1);
+    expect(selectedProviders).toEqual(['SERPAPI']);
+    expect(
+      (
+        await database.pool.query(
+          `SELECT status,result,failure_code,failure_summary FROM jobs WHERE id=$1`,
+          [queued.capture!.job_id],
+        )
+      ).rows[0],
+    ).toMatchObject({
+      status: 'FAILED',
+      result: null,
+      failure_code: 'SERP_OWNER_ACTION_REQUIRED',
+    });
+    const capture = (
+      await database.pool.query(
+        `SELECT status,failure_code,failure_origin,failure_http_status,failure_content_type,
+          provider_request_id,failure_provider_status,failure_history,normalized_result
+         FROM serp_api_captures WHERE id=$1`,
+        [queued.capture!.id],
+      )
+    ).rows[0];
+    expect(capture).toMatchObject({
+      status: 'FAILED',
+      failure_code: 'TEMPORARILY_UNAVAILABLE',
+      failure_origin: 'PROVIDER',
+      failure_http_status: 503,
+      failure_content_type: 'application/json',
+      provider_request_id: 'fixture-request-id',
+      failure_provider_status: 'Error',
+      normalized_result: null,
+    });
+    expect(capture.failure_history).toHaveLength(1);
+    expect(capture.failure_history[0]).toMatchObject({
+      category: 'TEMPORARILY_UNAVAILABLE',
+      origin: 'PROVIDER',
+      httpStatus: 503,
+    });
+    expect(
+      (
+        await database.pool.query(
+          `SELECT event FROM job_events WHERE job_id=$1 ORDER BY created_at,id`,
+          [queued.capture!.job_id],
+        )
+      ).rows.map((row) => row.event),
+    ).toEqual([
+      'ENQUEUED',
+      'CLAIMED',
+      'SERP_API_FETCH_STARTED',
+      'SERP_API_PROVIDER_FAILED',
+      'SERP_API_FALLBACK_REQUIRED',
+      'FAILED',
+    ]);
+    expect(
+      (
+        await database.pool.query(
+          `SELECT count(*)::int n FROM evidence_items WHERE request_id=$1`,
+          [requestId],
+        )
+      ).rows[0].n,
+    ).toBe(0);
+    expect(await deterministicEvidencePacket(opportunityId, database.pool)).toEqual(packetBefore);
+    expect(
+      (
+        await database.pool.query(`SELECT status FROM source_change_plans WHERE id=$1`, [
+          plan.rows[0].id,
+        ])
+      ).rows[0].status,
+    ).toBe('READY_FOR_REVIEW');
+    expect((await database.pool.query(`SELECT count(*)::int n FROM ai_usage`)).rows[0].n).toBe(0);
+    expect(
+      (
+        await serpProviderStatus({ SERPAPI: true, SERPSTACK: false, SERPER: false }, database.pool)
+      ).find((entry) => entry.provider === 'SERPAPI'),
+    ).toMatchObject({
+      health: 'TEMPORARILY_UNAVAILABLE',
+      last_error_category: 'TEMPORARILY_UNAVAILABLE',
+      consecutive_failures: 1,
+      selection_eligible: false,
+      used: 1,
+      reserved: 0,
+    });
+  });
+
+  it('keeps capability mismatch distinct without invoking a provider', async () => {
+    await configureSerpProvider(
+      {
+        provider: 'SERPAPI',
+        enabled: true,
+        configuredAllowance: 1,
+        periodStart: new Date('2026-08-01T00:00:00Z'),
+        periodEnd: new Date('2026-09-01T00:00:00Z'),
+      },
+      database.pool,
+    );
+    const queued = await enqueueSerpApiCapture(
+      { opportunityId, requestId, locationProfileId, device: 'MOBILE' },
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    await database.pool.query(
+      `UPDATE serp_provider_configs
+       SET capabilities=jsonb_set(capabilities,'{supportsMobile}','false'::jsonb)
+       WHERE provider='SERPAPI'`,
+    );
+    expect(
+      await reserveSerpProviderAttempt(
+        queued.capture!.id,
+        { SERPAPI: true, SERPSTACK: false, SERPER: false },
+        database.pool,
+      ),
+    ).toBeNull();
+    expect(
+      (
+        await database.pool.query(
+          `SELECT status,failure_code,failure_summary FROM serp_api_captures WHERE id=$1`,
+          [queued.capture!.id],
+        )
+      ).rows[0],
+    ).toMatchObject({ status: 'CAPABILITY_MISMATCH', failure_code: 'CAPABILITY_MISMATCH' });
   });
 
   it('reserves one allowance transactionally and blocks a concurrent second capture', async () => {

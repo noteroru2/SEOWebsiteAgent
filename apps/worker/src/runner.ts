@@ -177,85 +177,100 @@ export async function executeOne(
         throw Object.assign(new Error('SERP API capture identity required'), {
           code: 'CAPTURE_INVALID',
         });
-      for (let attemptNumber = 1; attemptNumber <= 4; attemptNumber += 1) {
-        const attempt = await reserveSerpProviderAttempt(
-          payload.captureId,
-          undefined,
-          pool,
-          payload,
-        );
-        if (!attempt) {
-          await recordJobEvent(
-            id,
-            'SERP_API_FALLBACK_REQUIRED',
-            { fallback: 'OWNER_BROWSER' },
-            database,
-          );
-          return {
-            state: 'SUCCEEDED' as const,
-            job: await markJobSucceeded(id, { fallback: 'OWNER_BROWSER' }, pool),
-          };
-        }
-        if (payload.reviewPolicy && payload.reviewPolicy !== attempt.capture.review_policy)
-          throw Object.assign(new Error('SERP review policy identity mismatch'), {
-            code: 'SERP_REVIEW_POLICY_MISMATCH',
-          });
+      const attempt = await reserveSerpProviderAttempt(payload.captureId, undefined, pool, payload);
+      if (!attempt) {
         await recordJobEvent(
           id,
-          'SERP_API_FETCH_STARTED',
-          { captureId: payload.captureId, provider: attempt.provider, attemptNumber },
+          'SERP_API_FALLBACK_REQUIRED',
+          { fallback: 'OWNER_BROWSER', executed: false },
           database,
         );
-        try {
-          const provider = serpProviderFactory(attempt.provider);
-          const result = await provider.search(
-            attempt.requirement,
-            AbortSignal.timeout(Number(process.env.SERP_API_TIMEOUT_MS ?? 15_000)),
-          );
-          const persisted = await persistSerpApiSuccess(payload.captureId, result, pool);
-          await recordJobEvent(
+        return {
+          state: 'FAILED' as const,
+          job: await markJobFailed(
             id,
-            'SERP_API_CAPTURED',
-            { captureId: payload.captureId, provider: attempt.provider, ...persisted },
-            database,
-          );
-          return {
-            state: 'SUCCEEDED' as const,
-            job: await markJobSucceeded(
-              id,
-              { captureId: payload.captureId, provider: attempt.provider, ...persisted },
-              pool,
-            ),
-          };
-        } catch (error) {
-          const providerError =
-            error instanceof SerpProviderError
-              ? error
-              : new SerpProviderError(
-                  'TEMPORARILY_UNAVAILABLE',
-                  error instanceof Error ? error.message : 'Provider request failed',
-                );
-          await persistSerpApiFailure(
-            {
-              captureId: payload.captureId,
-              provider: attempt.provider,
-              category: providerError.category,
-              summary: providerError.message,
-              provenNonCounted: providerError.provenNonCounted,
-            },
+            'SERP_OWNER_ACTION_REQUIRED',
+            'No eligible free provider is available; owner browser capture required',
             pool,
-          );
-          await recordJobEvent(
-            id,
-            'SERP_API_PROVIDER_FAILED',
-            { provider: attempt.provider, category: providerError.category },
-            database,
-          );
-        }
+          ),
+        };
       }
-      throw Object.assign(new Error('No free SERP provider succeeded'), {
-        code: 'SERP_PROVIDER_POOL_EXHAUSTED',
-      });
+      if (payload.reviewPolicy && payload.reviewPolicy !== attempt.capture.review_policy)
+        throw Object.assign(new Error('SERP review policy identity mismatch'), {
+          code: 'SERP_REVIEW_POLICY_MISMATCH',
+        });
+      await recordJobEvent(
+        id,
+        'SERP_API_FETCH_STARTED',
+        { captureId: payload.captureId, provider: attempt.provider, attemptNumber: 1 },
+        database,
+      );
+      try {
+        const provider = serpProviderFactory(attempt.provider);
+        const result = await provider.search(
+          attempt.requirement,
+          AbortSignal.timeout(Number(process.env.SERP_API_TIMEOUT_MS ?? 15_000)),
+        );
+        const persisted = await persistSerpApiSuccess(payload.captureId, result, pool);
+        await recordJobEvent(
+          id,
+          'SERP_API_CAPTURED',
+          { captureId: payload.captureId, provider: attempt.provider, ...persisted },
+          database,
+        );
+        return {
+          state: 'SUCCEEDED' as const,
+          job: await markJobSucceeded(
+            id,
+            { captureId: payload.captureId, provider: attempt.provider, ...persisted },
+            pool,
+          ),
+        };
+      } catch (error) {
+        const providerError =
+          error instanceof SerpProviderError
+            ? error
+            : new SerpProviderError('UNKNOWN_FAILURE', 'Provider request failed', false, {
+                origin: 'UNKNOWN',
+              });
+        await persistSerpApiFailure(
+          {
+            captureId: payload.captureId,
+            provider: attempt.provider,
+            category: providerError.category,
+            summary: providerError.message,
+            provenNonCounted: providerError.provenNonCounted,
+            diagnostics: providerError.diagnostics,
+          },
+          pool,
+        );
+        await recordJobEvent(
+          id,
+          'SERP_API_PROVIDER_FAILED',
+          {
+            provider: attempt.provider,
+            category: providerError.category,
+            origin: providerError.diagnostics.origin,
+            httpStatus: providerError.diagnostics.httpStatus ?? null,
+          },
+          database,
+        );
+        await recordJobEvent(
+          id,
+          'SERP_API_FALLBACK_REQUIRED',
+          { fallback: 'OWNER_BROWSER', executed: false },
+          database,
+        );
+        return {
+          state: 'FAILED' as const,
+          job: await markJobFailed(
+            id,
+            'SERP_OWNER_ACTION_REQUIRED',
+            `Provider evidence unavailable (${providerError.category}); owner browser capture required`,
+            pool,
+          ),
+        };
+      }
     }
     if (type === 'REFRESH_SOURCE_REPOSITORY') {
       const siteId = String(job.site_id ?? '');

@@ -87,6 +87,29 @@ export type SerpProvider = {
   search(requirement: SerpEvidenceRequirement, signal: AbortSignal): Promise<NormalizedSerpResult>;
 };
 
+export type SerpFailureCategory =
+  | 'AUTH_FAILED'
+  | 'FREE_QUOTA_EXHAUSTED'
+  | 'RATE_LIMITED'
+  | 'TEMPORARILY_UNAVAILABLE'
+  | 'INVALID_REQUEST'
+  | 'CAPABILITY_MISMATCH'
+  | 'PROVIDER_ERROR'
+  | 'NETWORK_TIMEOUT'
+  | 'UNKNOWN_FAILURE'
+  | 'MALFORMED_RESPONSE';
+
+export type SerpFailureOrigin = 'PROVIDER' | 'NETWORK' | 'ADAPTER' | 'REQUEST' | 'UNKNOWN';
+
+export type SerpFailureDiagnostics = {
+  origin: SerpFailureOrigin;
+  httpStatus?: number;
+  providerCode?: string;
+  responseContentType?: string;
+  providerRequestId?: string;
+  providerStatus?: string;
+};
+
 const precisionRank: Record<LocationPrecision, number> = {
   UNKNOWN: 0,
   COUNTRY: 1,
@@ -230,48 +253,141 @@ function normalized(
 
 export class SerpProviderError extends Error {
   constructor(
-    public category:
-      | 'FREE_QUOTA_EXHAUSTED'
-      | 'AUTH_FAILED'
-      | 'RATE_LIMITED'
-      | 'TEMPORARILY_UNAVAILABLE'
-      | 'MALFORMED_RESPONSE',
+    public category: SerpFailureCategory,
     message: string,
     public provenNonCounted = false,
+    public diagnostics: SerpFailureDiagnostics = { origin: 'UNKNOWN' },
   ) {
     super(message);
   }
 }
 
 const responseLimit = 1_048_576;
+function classifyProviderDetail(detail: string): SerpFailureCategory {
+  if (/quota|credit|payment|billing|usage.?limit/i.test(detail)) return 'FREE_QUOTA_EXHAUSTED';
+  if (/api.?key|access.?key|auth|unauthori[sz]ed|forbidden/i.test(detail)) return 'AUTH_FAILED';
+  if (/rate.?limit|too many requests/i.test(detail)) return 'RATE_LIMITED';
+  if (/invalid|unsupported|parameter|location|query|bad request/i.test(detail))
+    return 'INVALID_REQUEST';
+  if (/timeout|temporar|unavailable|try again|gateway/i.test(detail))
+    return 'TEMPORARILY_UNAVAILABLE';
+  return 'PROVIDER_ERROR';
+}
+
+function boundedDiagnostic(value: unknown) {
+  const text = value == null ? '' : String(value);
+  return text && text.length <= 120 && !/key|token|secret|credential/i.test(text)
+    ? text
+    : undefined;
+}
+
 async function boundedJson(response: Response) {
   const text = await response.text();
+  const responseContentType = response.headers.get('content-type')?.slice(0, 120) || undefined;
   if (new TextEncoder().encode(text).byteLength > responseLimit)
-    throw new SerpProviderError('MALFORMED_RESPONSE', 'Provider response exceeded 1 MiB');
+    throw new SerpProviderError('MALFORMED_RESPONSE', 'Provider response exceeded 1 MiB', false, {
+      origin: 'ADAPTER',
+      httpStatus: response.status,
+      responseContentType,
+    });
   let body: unknown;
   try {
     body = JSON.parse(text);
   } catch {
-    throw new SerpProviderError('MALFORMED_RESPONSE', 'Provider returned invalid JSON');
+    if (!response.ok) {
+      const diagnostics = {
+        origin: 'PROVIDER' as const,
+        httpStatus: response.status,
+        responseContentType,
+      };
+      if (response.status === 401 || response.status === 403)
+        throw new SerpProviderError(
+          'AUTH_FAILED',
+          'Provider authentication failed',
+          true,
+          diagnostics,
+        );
+      if (response.status === 402)
+        throw new SerpProviderError(
+          'FREE_QUOTA_EXHAUSTED',
+          'Provider free quota unavailable',
+          false,
+          diagnostics,
+        );
+      if (response.status === 408)
+        throw new SerpProviderError(
+          'NETWORK_TIMEOUT',
+          'Provider request timed out',
+          false,
+          diagnostics,
+        );
+      if (response.status === 429)
+        throw new SerpProviderError(
+          'RATE_LIMITED',
+          'Provider rate limited the request',
+          false,
+          diagnostics,
+        );
+      if (response.status >= 500)
+        throw new SerpProviderError(
+          'TEMPORARILY_UNAVAILABLE',
+          'Provider request failed',
+          false,
+          diagnostics,
+        );
+    }
+    throw new SerpProviderError('MALFORMED_RESPONSE', 'Provider returned invalid JSON', false, {
+      origin: 'ADAPTER',
+      httpStatus: response.status,
+      responseContentType,
+    });
   }
+  const diagnostics = {
+    origin: 'PROVIDER' as const,
+    httpStatus: response.status,
+    responseContentType,
+  };
   if (response.status === 401 || response.status === 403)
-    throw new SerpProviderError('AUTH_FAILED', 'Provider authentication failed', true);
+    throw new SerpProviderError('AUTH_FAILED', 'Provider authentication failed', true, diagnostics);
   if (response.status === 402)
-    throw new SerpProviderError('FREE_QUOTA_EXHAUSTED', 'Provider free quota unavailable');
+    throw new SerpProviderError(
+      'FREE_QUOTA_EXHAUSTED',
+      'Provider free quota unavailable',
+      false,
+      diagnostics,
+    );
   if (response.status === 429)
-    throw new SerpProviderError('RATE_LIMITED', 'Provider rate limited the request');
+    throw new SerpProviderError(
+      'RATE_LIMITED',
+      'Provider rate limited the request',
+      false,
+      diagnostics,
+    );
+  if (response.status === 408)
+    throw new SerpProviderError(
+      'NETWORK_TIMEOUT',
+      'Provider request timed out',
+      false,
+      diagnostics,
+    );
   if (!response.ok) {
     const detail = JSON.stringify(body);
-    const category = /quota|credit|payment|billing|usage.?limit/i.test(detail)
-      ? 'FREE_QUOTA_EXHAUSTED'
-      : /api.?key|access.?key|auth|unauthori[sz]ed|forbidden/i.test(detail)
-        ? 'AUTH_FAILED'
-        : /rate.?limit|too many requests/i.test(detail)
-          ? 'RATE_LIMITED'
-          : 'TEMPORARILY_UNAVAILABLE';
-    throw new SerpProviderError(category, 'Provider request failed', category === 'AUTH_FAILED');
+    const category =
+      response.status === 400 || response.status === 422
+        ? classifyProviderDetail(detail) === 'AUTH_FAILED'
+          ? 'AUTH_FAILED'
+          : 'INVALID_REQUEST'
+        : response.status >= 500
+          ? 'TEMPORARILY_UNAVAILABLE'
+          : classifyProviderDetail(detail);
+    throw new SerpProviderError(
+      category,
+      'Provider request failed',
+      category === 'AUTH_FAILED',
+      diagnostics,
+    );
   }
-  return body;
+  return { body, diagnostics };
 }
 
 const object = z.record(z.string(), z.unknown());
@@ -365,9 +481,21 @@ abstract class HttpProvider implements SerpProvider {
     try {
       return boundedJson(await this.fetcher(url, { ...init, signal: init.signal }));
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError')
-        throw new SerpProviderError('TEMPORARILY_UNAVAILABLE', 'Provider request timed out');
-      throw error;
+      if (error instanceof SerpProviderError) throw error;
+      if (
+        (error instanceof DOMException && ['AbortError', 'TimeoutError'].includes(error.name)) ||
+        init.signal?.aborted
+      )
+        throw new SerpProviderError('NETWORK_TIMEOUT', 'Provider request timed out', false, {
+          origin: 'NETWORK',
+        });
+      if (error instanceof TypeError)
+        throw new SerpProviderError('UNKNOWN_FAILURE', 'Provider network request failed', false, {
+          origin: 'NETWORK',
+        });
+      throw new SerpProviderError('UNKNOWN_FAILURE', 'Provider request failed', false, {
+        origin: 'UNKNOWN',
+      });
     }
   }
 }
@@ -406,14 +534,23 @@ export class SerpApiProvider extends HttpProvider {
         'Provider location failed Unicode round-trip validation',
         true,
       );
-    const body = object.parse(await this.post(url.toString(), { method: 'GET', signal }));
-    if (body.error)
+    const response = await this.post(url.toString(), { method: 'GET', signal });
+    const body = object.parse(response.body);
+    if (body.error) {
+      const detail = JSON.stringify(body.error);
+      const metadata = object.catch({}).parse(body.search_metadata);
       throw new SerpProviderError(
-        /quota|credit|billing|limit/i.test(String(body.error))
-          ? 'FREE_QUOTA_EXHAUSTED'
-          : 'TEMPORARILY_UNAVAILABLE',
+        classifyProviderDetail(detail),
         'SerpApi rejected the request',
+        false,
+        {
+          ...response.diagnostics,
+          providerCode: boundedDiagnostic(object.catch({}).parse(body.error).code),
+          providerRequestId: boundedDiagnostic(metadata.id),
+          providerStatus: boundedDiagnostic(metadata.status),
+        },
       );
+    }
     const params = object.catch({}).parse(body.search_parameters);
     return normalized(this.name, requirement, {
       requestId: object.catch({}).parse(body.search_metadata).id as string | undefined,
@@ -444,16 +581,15 @@ export class SerpstackProvider extends HttpProvider {
       device: requirement.device.toLowerCase(),
       num: String(requirement.maxOrganicResults),
     }).forEach(([k, v]) => url.searchParams.set(k, v));
-    const body = object.parse(await this.post(url.toString(), { method: 'GET', signal }));
+    const response = await this.post(url.toString(), { method: 'GET', signal });
+    const body = object.parse(response.body);
     if (body.success === false || body.error) {
       const err = JSON.stringify(body.error ?? body);
       throw new SerpProviderError(
-        /usage_limit|quota|payment|billing/i.test(err)
-          ? 'FREE_QUOTA_EXHAUSTED'
-          : /access_key|auth/i.test(err)
-            ? 'AUTH_FAILED'
-            : 'TEMPORARILY_UNAVAILABLE',
+        classifyProviderDetail(err),
         'Serpstack rejected the request',
+        false,
+        response.diagnostics,
       );
     }
     const params = object.catch({}).parse(body.search_parameters);
@@ -474,30 +610,25 @@ export class SerperProvider extends HttpProvider {
   name = 'SERPER' as const;
   capabilities = PROVIDER_CAPABILITIES.SERPER;
   async search(requirement: SerpEvidenceRequirement, signal: AbortSignal) {
-    const body = object.parse(
-      await this.post('https://google.serper.dev/search', {
-        method: 'POST',
-        headers: { 'X-API-KEY': this.apiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          q: requirement.query,
-          gl: 'th',
-          hl: 'th',
-          num: requirement.maxOrganicResults,
-        }),
-        signal,
+    const response = await this.post('https://google.serper.dev/search', {
+      method: 'POST',
+      headers: { 'X-API-KEY': this.apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        q: requirement.query,
+        gl: 'th',
+        hl: 'th',
+        num: requirement.maxOrganicResults,
       }),
-    );
+      signal,
+    });
+    const body = object.parse(response.body);
     if (body.error) {
       const detail = JSON.stringify(body.error);
       throw new SerpProviderError(
-        /quota|credit|payment|billing|usage.?limit/i.test(detail)
-          ? 'FREE_QUOTA_EXHAUSTED'
-          : /api.?key|auth|unauthori[sz]ed|forbidden/i.test(detail)
-            ? 'AUTH_FAILED'
-            : /rate.?limit|too many requests/i.test(detail)
-              ? 'RATE_LIMITED'
-              : 'TEMPORARILY_UNAVAILABLE',
+        classifyProviderDetail(detail),
         'Serper rejected the request',
+        false,
+        response.diagnostics,
       );
     }
     return normalized(this.name, requirement, {

@@ -420,10 +420,7 @@ function EvidenceRequiredPanel({
                     <strong>Provider:</strong> {String(latestApiCapture.provider ?? 'PENDING')}
                   </p>
                   <p>
-                    <strong>Status:</strong>{' '}
-                    {latestApiCapture.status === 'PENDING_REVIEW'
-                      ? 'Captured — Review Required'
-                      : String(latestApiCapture.status)}
+                    <strong>Status:</strong> {apiCaptureStatusLabel(latestApiCapture)}
                   </p>
                   <p>
                     <strong>Review policy:</strong> {String(latestApiCapture.review_policy)}
@@ -475,6 +472,12 @@ function EvidenceRequiredPanel({
                   {latestApiCapture.conflict ? (
                     <div className="notice danger-text">
                       SERP_OBSERVATION_CONFLICT — owner and API observations are both preserved.
+                    </div>
+                  ) : null}
+                  {!latestApiCapture.normalized_result && latestApiCapture.failure_code ? (
+                    <div className="notice danger-text">
+                      {String(latestApiCapture.failure_code)} —{' '}
+                      {String(latestApiCapture.failure_summary ?? 'Owner action required')}
                     </div>
                   ) : null}
                   {latestApiCapture.status === 'PENDING_REVIEW' ? (
@@ -792,6 +795,19 @@ function safeJobFailure(job: Record<string, unknown>) {
   if (code === 'AI_RATE_LIMITED') return 'The AI provider is temporarily rate limited.';
   if (code === 'WORKER_LOST') return 'The worker stopped before completing the job.';
   return 'Re-evaluation did not complete. Review worker health and try again deliberately.';
+}
+
+function apiCaptureStatusLabel(capture: Record<string, unknown>) {
+  if (capture.status === 'PENDING_REVIEW') return 'Captured — Review Required';
+  if (capture.status === 'FAILED') return 'Provider unavailable — Owner action required';
+  if (capture.status === 'CAPABILITY_MISMATCH')
+    return 'Provider capability mismatch — Owner action required';
+  if (capture.status === 'FREE_QUOTA_EXHAUSTED')
+    return 'Free provider quota unavailable — Owner action required';
+  if (capture.status === 'AUTH_FAILED')
+    return 'Provider authentication failed — Owner action required';
+  if (capture.status === 'RATE_LIMITED') return 'Provider rate limited — Owner action required';
+  return String(capture.status);
 }
 
 function SourceUnderstandingPanel({

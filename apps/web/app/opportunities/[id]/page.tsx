@@ -9,6 +9,7 @@ import {
   evidenceReevaluationStateForOpportunity,
   currentEvidenceV3,
   evidenceAutomationPanelForOpportunity,
+  verifiedSerpLocationProfilesForOpportunity,
 } from '@seo-agent/database';
 import {
   addOwnerEvidenceAction,
@@ -37,7 +38,7 @@ export default async function OpportunityDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [data, ai, source, evidenceRequired, evidencePacket, reevaluation, automation] =
+  const [data, ai, source, evidenceRequired, evidencePacket, reevaluation, automation, locations] =
     await Promise.all([
       opportunityDetail(id),
       aiPanelForOpportunity(id),
@@ -46,6 +47,7 @@ export default async function OpportunityDetailPage({
       deterministicEvidencePacket(id),
       evidenceReevaluationStateForOpportunity(id),
       evidenceAutomationPanelForOpportunity(id),
+      verifiedSerpLocationProfilesForOpportunity(id),
     ]);
   if (!data) notFound();
   const item = data.opportunity;
@@ -111,6 +113,7 @@ export default async function OpportunityDetailPage({
         evidencePacketHash={evidencePacket.evidencePacketHash}
         reevaluation={reevaluation}
         automation={automation}
+        locations={locations}
       />
       <div className="grid section">
         <section className="panel">
@@ -156,6 +159,7 @@ function EvidenceRequiredPanel({
   evidencePacketHash,
   reevaluation,
   automation,
+  locations,
 }: {
   evidence: Awaited<ReturnType<typeof evidencePanelForOpportunity>>;
   opportunityId: string;
@@ -164,6 +168,7 @@ function EvidenceRequiredPanel({
   evidencePacketHash: string;
   reevaluation: Awaited<ReturnType<typeof evidenceReevaluationStateForOpportunity>>;
   automation: Awaited<ReturnType<typeof evidenceAutomationPanelForOpportunity>>;
+  locations: Awaited<ReturnType<typeof verifiedSerpLocationProfilesForOpportunity>>;
 }) {
   const latestJob = reevaluation.latestJob as Record<string, unknown> | null;
   const latestV3 = reevaluation.latestV3 as Record<string, unknown> | null;
@@ -236,6 +241,9 @@ function EvidenceRequiredPanel({
             (capture) => capture.request_id === request.id,
           );
           const latestApiCapture = apiCaptures[0] as Record<string, unknown> | undefined;
+          const location = locations.find(
+            (profile) => profile.provider === 'SERPAPI' && profile.precision === 'CITY',
+          );
           const machine = (latestCapture?.machine_capture ?? {}) as Record<string, unknown>;
           const features = (machine.features ?? {}) as Record<string, unknown>;
           return (
@@ -254,14 +262,43 @@ function EvidenceRequiredPanel({
                     Required: City · Mobile. Fetching uses one owner-authorized internal free
                     allowance. Opening this page never consumes provider quota.
                   </p>
+                  {location ? (
+                    <div className="grid">
+                      <p>
+                        <strong>Location:</strong> {location.owner_label}
+                      </p>
+                      <p>
+                        <strong>Provider location:</strong> {location.canonical_location}
+                      </p>
+                      <p>
+                        <strong>Precision:</strong> {location.precision}
+                      </p>
+                      <p>
+                        <strong>Verified:</strong> YES
+                      </p>
+                      <p>
+                        <strong>Provider:</strong> SerpApi
+                      </p>
+                      <p>
+                        <strong>Review:</strong> Owner required
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="notice danger-text">Verified CITY location unavailable.</p>
+                  )}
                   <form action={fetchSerpApiAction.bind(null, opportunityId, request.id)}>
                     <label>
-                      Requested location
-                      <input
-                        name="requestedLocation"
-                        defaultValue="Ubon Ratchathani, Thailand"
-                        required
-                      />
+                      Verified location
+                      <select name="locationProfileId" defaultValue="" required>
+                        <option value="" disabled>
+                          Select verified location
+                        </option>
+                        {locations.map((profile) => (
+                          <option key={profile.id} value={profile.id}>
+                            {profile.owner_label} · {profile.provider} · {profile.precision}
+                          </option>
+                        ))}
+                      </select>
                     </label>
                     <label>
                       Device
@@ -271,7 +308,7 @@ function EvidenceRequiredPanel({
                         <option value="TABLET">Tablet</option>
                       </select>
                     </label>
-                    <button>Fetch SERP Evidence</button>
+                    <button disabled={!location}>Fetch SERP Evidence</button>
                   </form>
                   <h3>Automated Browser SERP capture</h3>
                   <p className="hint">
@@ -330,14 +367,49 @@ function EvidenceRequiredPanel({
                     This explicit action consumes one internal free allowance. New evidence never
                     triggers AI automatically. Captures always require owner review.
                   </p>
+                  {location ? (
+                    <div className="grid">
+                      <p>
+                        <strong>Location:</strong> {location.owner_label}
+                      </p>
+                      <p>
+                        <strong>Provider location:</strong> {location.canonical_location}
+                      </p>
+                      <p>
+                        <strong>Precision:</strong> {location.precision}
+                      </p>
+                      <p>
+                        <strong>Verified:</strong> YES
+                      </p>
+                      <p>
+                        <strong>Provider:</strong> SerpApi
+                      </p>
+                      <p>
+                        <strong>Device:</strong> Mobile
+                      </p>
+                      <p>
+                        <strong>Review:</strong> Owner required
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="notice danger-text">Verified CITY location unavailable.</p>
+                  )}
                   <form action={fetchSerpApiAction.bind(null, opportunityId, request.id)}>
-                    <input
-                      type="hidden"
-                      name="requestedLocation"
-                      value="Ubon Ratchathani, Thailand"
-                    />
+                    <label>
+                      Verified location
+                      <select name="locationProfileId" defaultValue="" required>
+                        <option value="" disabled>
+                          Select verified location
+                        </option>
+                        {locations.map((profile) => (
+                          <option key={profile.id} value={profile.id}>
+                            {profile.owner_label} · {profile.provider} · {profile.precision}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     <input type="hidden" name="device" value="MOBILE" />
-                    <button>Fetch Fresh SERP Evidence · City · Mobile</button>
+                    <button disabled={!location}>Fetch Fresh SERP Evidence · City · Mobile</button>
                   </form>
                 </details>
               ) : null}

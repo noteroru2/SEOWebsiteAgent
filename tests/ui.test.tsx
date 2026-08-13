@@ -53,6 +53,19 @@ vi.mock('@seo-agent/database', () => ({
     facts: { siteId: '11111111-1111-4111-8111-111111111111', requirements: [], complete: false },
     captures: [],
   })),
+  verifiedSerpLocationProfilesForOpportunity: vi.fn(async () => [
+    {
+      id: '33333333-3333-4333-8333-333333333333',
+      owner_label: 'Ubon Ratchathani, Thailand',
+      provider: 'SERPAPI',
+      canonical_location: 'Ubon Ratchathani,Ubon Ratchathani,Thailand',
+      provider_location_id: '5b18bb955f59e41ee7212759',
+      precision: 'CITY',
+      country_code: 'th',
+      timezone: 'Asia/Bangkok',
+      status: 'ACTIVE',
+    },
+  ]),
   confirmReusableOwnerFact: vi.fn(),
   enqueueSerpCapture: vi.fn(),
   confirmSerpCapture: vi.fn(),
@@ -342,6 +355,10 @@ describe('server-rendered UI foundations', () => {
     expect(detail).toContain('Add SERP Observation');
     expect(detail).toContain('Timezone');
     expect(detail).toContain('Asia/Bangkok');
+    expect(detail).toContain('Ubon Ratchathani,Ubon Ratchathani,Thailand');
+    expect(detail).toContain('name="locationProfileId"');
+    expect(detail).toContain('value="33333333-3333-4333-8333-333333333333"');
+    expect(detail).not.toContain('name="requestedLocation"');
     expect(detail).not.toContain('OPENAI_API_KEY=');
   });
   it('shows a disabled queued state and worker warning for an active evidence re-evaluation', async () => {

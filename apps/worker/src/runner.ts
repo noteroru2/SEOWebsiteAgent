@@ -161,13 +161,29 @@ export async function executeOne(
       const payload = (job.payload ?? {}) as {
         captureId?: string;
         reviewPolicy?: 'AUTO_ACCEPT_IF_POLICY_ALLOWS' | 'OWNER_REVIEW_REQUIRED';
+        locationProfileId?: string;
+        requestedLocationLabel?: string;
+        provider?: 'SERPAPI' | 'SERPSTACK' | 'SERPER';
+        canonicalProviderLocation?: string;
+        providerLocationId?: string;
+        verifiedPrecision?: 'UNKNOWN' | 'COUNTRY' | 'REGION' | 'CITY' | 'COORDINATE';
+        countryCode?: string;
+        timezone?: string;
+        verifiedAt?: string;
+        verificationSource?: string;
+        requiredPrecision?: 'UNKNOWN' | 'COUNTRY' | 'REGION' | 'CITY' | 'COORDINATE';
       };
       if (!payload.captureId)
         throw Object.assign(new Error('SERP API capture identity required'), {
           code: 'CAPTURE_INVALID',
         });
       for (let attemptNumber = 1; attemptNumber <= 4; attemptNumber += 1) {
-        const attempt = await reserveSerpProviderAttempt(payload.captureId, undefined, pool);
+        const attempt = await reserveSerpProviderAttempt(
+          payload.captureId,
+          undefined,
+          pool,
+          payload,
+        );
         if (!attempt) {
           await recordJobEvent(
             id,

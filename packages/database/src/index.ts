@@ -53,7 +53,22 @@ export async function enqueueJob(input: unknown, database = getDatabase().db) {
       ? {
           opportunityId: value.opportunityId,
           captureId: value.captureId,
-          ...(value.type === 'FETCH_SERP_API' ? { reviewPolicy: value.reviewPolicy } : {}),
+          ...(value.type === 'FETCH_SERP_API'
+            ? {
+                reviewPolicy: value.reviewPolicy,
+                locationProfileId: value.locationProfileId,
+                requestedLocationLabel: value.requestedLocationLabel,
+                provider: value.provider,
+                canonicalProviderLocation: value.canonicalProviderLocation,
+                providerLocationId: value.providerLocationId,
+                verifiedPrecision: value.verifiedPrecision,
+                requiredPrecision: value.requiredPrecision,
+                countryCode: value.countryCode,
+                timezone: value.timezone,
+                verifiedAt: value.verifiedAt,
+                verificationSource: value.verificationSource,
+              }
+            : {}),
         }
       : ['ANALYZE_OPPORTUNITY', 'GENERATE_SOURCE_CHANGE_PLAN'].includes(value.type)
         ? {

@@ -138,6 +138,17 @@ export const enqueueJobSchema = z
       .optional(),
     captureId: z.string().uuid().optional(),
     reviewPolicy: z.enum(['AUTO_ACCEPT_IF_POLICY_ALLOWS', 'OWNER_REVIEW_REQUIRED']).optional(),
+    locationProfileId: z.string().uuid().optional(),
+    requestedLocationLabel: z.string().optional(),
+    provider: z.enum(['SERPAPI', 'SERPSTACK', 'SERPER']).optional(),
+    canonicalProviderLocation: z.string().optional(),
+    providerLocationId: z.string().optional(),
+    verifiedPrecision: z.enum(['UNKNOWN', 'COUNTRY', 'REGION', 'CITY', 'COORDINATE']).optional(),
+    requiredPrecision: z.enum(['UNKNOWN', 'COUNTRY', 'REGION', 'CITY', 'COORDINATE']).optional(),
+    countryCode: z.string().length(2).optional(),
+    timezone: z.string().optional(),
+    verifiedAt: z.string().datetime().optional(),
+    verificationSource: z.string().optional(),
   })
   .superRefine((value, ctx) => {
     if (
@@ -182,6 +193,11 @@ export const enqueueJobSchema = z
         message: 'FETCH_SERP_API requires siteId, opportunityId and captureId',
       });
   });
+
+export const verifiedSerpFetchSchema = z.object({
+  locationProfileId: z.string().uuid(),
+  device: z.enum(['DESKTOP', 'MOBILE', 'TABLET']),
+});
 
 export const envSchema = z.object({
   DATABASE_URL: z.string().min(1),

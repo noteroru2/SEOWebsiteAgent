@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import {
   capabilityMismatch,
   classifyEvidenceRequirement,
@@ -32,7 +33,7 @@ import { requireTestDatabaseUrl, resetTestDatabase } from '../packages/database/
 
 const requirement = classifyEvidenceRequirement({
   query: 'รับซื้อโน๊ตบุ๊ค ใกล้ฉัน',
-  requestedLocation: 'Ubon Ratchathani, Thailand',
+  requestedLocation: 'Ubon Ratchathani,Ubon Ratchathani,Thailand',
   device: 'MOBILE',
 });
 
@@ -323,6 +324,7 @@ const database = createDatabase(requireTestDatabaseUrl());
 let siteId = '';
 let opportunityId = '';
 let requestId = '';
+let locationProfileId = '';
 
 const normalizedFixture = (): NormalizedSerpResult => ({
   provider: 'SERPAPI',
@@ -382,6 +384,33 @@ async function setupOpportunity(fingerprint = 'provider-pool') {
   return { opportunityId: opportunity.rows[0].id as string, requestId: req.id as string };
 }
 
+async function seedLocationProfile(
+  overrides: Partial<{
+    provider: 'SERPAPI' | 'SERPSTACK' | 'SERPER';
+    canonicalLocation: string;
+    providerLocationId: string;
+    precision: 'CITY' | 'COUNTRY';
+    status: 'ACTIVE' | 'INACTIVE';
+  }> = {},
+) {
+  return (
+    await database.pool.query(
+      `INSERT INTO serp_location_profiles(site_id,owner_label,provider,canonical_location,
+       provider_location_id,precision,country_code,timezone,verified_at,verification_source,status)
+       VALUES($1,'Ubon Ratchathani, Thailand',$2,$3,$4,$5,'th','Asia/Bangkok',now(),
+       'SERPAPI_LOCATIONS_API',$6) RETURNING id`,
+      [
+        siteId,
+        overrides.provider ?? 'SERPAPI',
+        overrides.canonicalLocation ?? 'Ubon Ratchathani,Ubon Ratchathani,Thailand',
+        overrides.providerLocationId ?? `fixture-${randomUUID()}`,
+        overrides.precision ?? 'CITY',
+        overrides.status ?? 'ACTIVE',
+      ],
+    )
+  ).rows[0].id as string;
+}
+
 describe('transactional free quota and evidence integration', () => {
   beforeAll(async () => migrate(database.db, { migrationsFolder: 'packages/database/migrations' }));
   beforeEach(async () => {
@@ -390,6 +419,9 @@ describe('transactional free quota and evidence integration', () => {
     siteId = (
       await createSite({ name: 'Provider Fixture', url: 'https://amphon.co.th/' }, database.db)
     ).id;
+    locationProfileId = await seedLocationProfile({
+      providerLocationId: '5b18bb955f59e41ee7212759',
+    });
     ({ opportunityId, requestId } = await setupOpportunity());
   });
   afterAll(async () => database.pool.end());
@@ -399,7 +431,7 @@ describe('transactional free quota and evidence integration', () => {
       {
         opportunityId,
         requestId,
-        requestedLocation: requirement.requestedLocation,
+        locationProfileId,
         device: 'MOBILE',
       },
       { SERPAPI: true, SERPSTACK: true, SERPER: true },
@@ -427,7 +459,7 @@ describe('transactional free quota and evidence integration', () => {
       {
         opportunityId,
         requestId,
-        requestedLocation: requirement.requestedLocation,
+        locationProfileId,
         device: 'MOBILE',
       },
       { SERPAPI: true, SERPSTACK: false, SERPER: false },
@@ -435,7 +467,7 @@ describe('transactional free quota and evidence integration', () => {
     );
     const secondIdentity = await setupOpportunity('provider-pool-second');
     const second = await enqueueSerpApiCapture(
-      { ...secondIdentity, requestedLocation: requirement.requestedLocation, device: 'MOBILE' },
+      { ...secondIdentity, locationProfileId, device: 'MOBILE' },
       { SERPAPI: true, SERPSTACK: false, SERPER: false },
       database.pool,
     );
@@ -481,7 +513,7 @@ describe('transactional free quota and evidence integration', () => {
       {
         opportunityId,
         requestId,
-        requestedLocation: 'Ubon Ratchathani,Ubon Ratchathani,Thailand',
+        locationProfileId,
         device: 'MOBILE',
       },
       { SERPAPI: true, SERPSTACK: false, SERPER: false },
@@ -502,6 +534,14 @@ describe('transactional free quota and evidence integration', () => {
       captureId: queued.capture!.id,
       requestId,
       opportunityId,
+      locationProfileId,
+      requestedLocationLabel: 'Ubon Ratchathani, Thailand',
+      provider: 'SERPAPI',
+      canonicalProviderLocation: 'Ubon Ratchathani,Ubon Ratchathani,Thailand',
+      providerLocationId: '5b18bb955f59e41ee7212759',
+      verifiedPrecision: 'CITY',
+      countryCode: 'th',
+      timezone: 'Asia/Bangkok',
     });
     expect(JSON.stringify(persisted.rows[0].job_payload)).not.toContain('?');
     const attempt = await reserveSerpProviderAttempt(
@@ -510,6 +550,121 @@ describe('transactional free quota and evidence integration', () => {
       database.pool,
     );
     expect(attempt?.requirement.query).toBe(expected);
+    expect(attempt?.requirement.requestedLocation).toBe(
+      'Ubon Ratchathani,Ubon Ratchathani,Thailand',
+    );
+  });
+
+  it.each([
+    [{ precision: 'COUNTRY' as const }, 'SERP_LOCATION_PRECISION_DOWNGRADE'],
+    [{ status: 'INACTIVE' as const }, 'SERP_LOCATION_PROFILE_INACTIVE'],
+    [{ provider: 'SERPSTACK' as const }, 'SERP_LOCATION_PROVIDER_MISMATCH'],
+  ])(
+    'blocks an unsafe verified-location profile before capture or quota reservation',
+    async (overrides, code) => {
+      await configureSerpProvider(
+        {
+          provider: 'SERPAPI',
+          enabled: true,
+          configuredAllowance: 1,
+          periodStart: new Date('2026-08-01T00:00:00Z'),
+          periodEnd: new Date('2026-09-01T00:00:00Z'),
+        },
+        database.pool,
+      );
+      const unsafeProfileId = await seedLocationProfile(overrides);
+      await expect(
+        enqueueSerpApiCapture(
+          { opportunityId, requestId, locationProfileId: unsafeProfileId, device: 'MOBILE' },
+          { SERPAPI: true, SERPSTACK: true, SERPER: false },
+          database.pool,
+        ),
+      ).rejects.toThrow(code);
+      expect(
+        (await database.pool.query(`SELECT count(*)::int n FROM serp_api_captures`)).rows[0].n,
+      ).toBe(0);
+      expect(
+        (
+          await database.pool.query(
+            `SELECT used,reserved FROM serp_provider_usage_periods WHERE provider='SERPAPI'`,
+          )
+        ).rows[0],
+      ).toMatchObject({ used: 0, reserved: 0 });
+    },
+  );
+
+  it('includes verified provider location identity in request fingerprint', async () => {
+    await configureSerpProvider(
+      {
+        provider: 'SERPAPI',
+        enabled: true,
+        configuredAllowance: 2,
+        periodStart: new Date('2026-08-01T00:00:00Z'),
+        periodEnd: new Date('2026-09-01T00:00:00Z'),
+      },
+      database.pool,
+    );
+    const first = await enqueueSerpApiCapture(
+      { opportunityId, requestId, locationProfileId, device: 'MOBILE' },
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    await database.pool.query(`UPDATE jobs SET status='CANCELLED' WHERE id=$1`, [
+      first.capture!.job_id,
+    ]);
+    await database.pool.query(`UPDATE serp_api_captures SET status='REJECTED' WHERE id=$1`, [
+      first.capture!.id,
+    ]);
+    const alternateProfileId = await seedLocationProfile({
+      providerLocationId: 'alternate-location-id',
+    });
+    const second = await enqueueSerpApiCapture(
+      { opportunityId, requestId, locationProfileId: alternateProfileId, device: 'MOBILE' },
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    expect(second.capture!.request_fingerprint).not.toBe(first.capture!.request_fingerprint);
+  });
+
+  it('blocks a tampered job location snapshot before quota reservation', async () => {
+    await configureSerpProvider(
+      {
+        provider: 'SERPAPI',
+        enabled: true,
+        configuredAllowance: 1,
+        periodStart: new Date('2026-08-01T00:00:00Z'),
+        periodEnd: new Date('2026-09-01T00:00:00Z'),
+      },
+      database.pool,
+    );
+    const queued = await enqueueSerpApiCapture(
+      {
+        opportunityId,
+        requestId,
+        locationProfileId,
+        device: 'MOBILE',
+        reviewPolicy: 'OWNER_REVIEW_REQUIRED',
+      },
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    const payload = (
+      await database.pool.query(`SELECT payload FROM jobs WHERE id=$1`, [queued.capture!.job_id])
+    ).rows[0].payload;
+    await expect(
+      reserveSerpProviderAttempt(
+        queued.capture!.id,
+        { SERPAPI: true, SERPSTACK: false, SERPER: false },
+        database.pool,
+        { ...payload, canonicalProviderLocation: 'Bangkok,Thailand' },
+      ),
+    ).rejects.toThrow('SERP_LOCATION_JOB_IDENTITY_MISMATCH');
+    const period = (
+      await database.pool.query(
+        `SELECT used,reserved FROM serp_provider_usage_periods WHERE provider='SERPAPI'`,
+      )
+    ).rows[0];
+    expect(period).toMatchObject({ used: 0, reserved: 0 });
   });
 
   it('persists review policy in capture/job identity and separates fingerprints', async () => {
@@ -527,7 +682,7 @@ describe('transactional free quota and evidence integration', () => {
       {
         opportunityId,
         requestId,
-        requestedLocation: requirement.requestedLocation,
+        locationProfileId,
         device: 'MOBILE',
         reviewPolicy: 'AUTO_ACCEPT_IF_POLICY_ALLOWS',
       },
@@ -553,7 +708,7 @@ describe('transactional free quota and evidence integration', () => {
       {
         opportunityId,
         requestId,
-        requestedLocation: requirement.requestedLocation,
+        locationProfileId,
         device: 'MOBILE',
         reviewPolicy: 'OWNER_REVIEW_REQUIRED',
       },
@@ -602,7 +757,7 @@ describe('transactional free quota and evidence integration', () => {
       {
         opportunityId,
         requestId,
-        requestedLocation: requirement.requestedLocation,
+        locationProfileId,
         device: 'MOBILE',
         reviewPolicy: 'OWNER_REVIEW_REQUIRED',
       },
@@ -721,7 +876,7 @@ describe('transactional free quota and evidence integration', () => {
       {
         opportunityId,
         requestId,
-        requestedLocation: requirement.requestedLocation,
+        locationProfileId,
         device: 'MOBILE',
         reviewPolicy: 'OWNER_REVIEW_REQUIRED',
       },
@@ -788,7 +943,7 @@ describe('transactional free quota and evidence integration', () => {
       {
         opportunityId,
         requestId,
-        requestedLocation: requirement.requestedLocation,
+        locationProfileId,
         device: 'MOBILE',
       },
       { SERPAPI: true, SERPSTACK: false, SERPER: false },
@@ -930,7 +1085,7 @@ describe('transactional free quota and evidence integration', () => {
       {
         opportunityId,
         requestId,
-        requestedLocation: requirement.requestedLocation,
+        locationProfileId,
         device: 'MOBILE',
       },
       { SERPAPI: true, SERPSTACK: false, SERPER: false },
@@ -980,7 +1135,7 @@ describe('transactional free quota and evidence integration', () => {
       {
         opportunityId,
         requestId,
-        requestedLocation: requirement.requestedLocation,
+        locationProfileId,
         device: 'MOBILE',
         reviewPolicy: 'OWNER_REVIEW_REQUIRED',
       },
@@ -1079,7 +1234,7 @@ describe('transactional free quota and evidence integration', () => {
       {
         opportunityId,
         requestId,
-        requestedLocation: requirement.requestedLocation,
+        locationProfileId,
         device: 'MOBILE',
       },
       { SERPAPI: true, SERPSTACK: false, SERPER: false },

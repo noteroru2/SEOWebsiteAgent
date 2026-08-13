@@ -24,9 +24,9 @@ import {
   acceptSerpApiCapture,
   rejectSerpApiCapture,
 } from '@seo-agent/database';
-import type { ProviderName, SerpDevice } from '@seo-agent/serp-providers';
+import type { ProviderName } from '@seo-agent/serp-providers';
 import { inspectRepository } from '@seo-agent/source-understanding';
-import { createSiteSchema } from '@seo-agent/shared';
+import { createSiteSchema, verifiedSerpFetchSchema } from '@seo-agent/shared';
 import { assertSafeTarget } from '@seo-agent/crawler';
 import { revalidatePath } from 'next/cache';
 
@@ -391,14 +391,16 @@ export async function fetchSerpApiAction(
   requestId: string,
   formData: FormData,
 ) {
-  const requestedLocation = String(formData.get('requestedLocation') ?? '').trim();
-  const device = String(formData.get('device') ?? 'MOBILE') as SerpDevice;
-  if (!requestedLocation || !['DESKTOP', 'MOBILE', 'TABLET'].includes(device))
-    throw new Error('Valid location and device are required');
+  if (formData.has('canonicalProviderLocation') || formData.has('providerLocationId'))
+    throw new Error('Browser-supplied provider location metadata is forbidden');
+  const { locationProfileId, device } = verifiedSerpFetchSchema.parse({
+    locationProfileId: formData.get('locationProfileId'),
+    device: formData.get('device') ?? 'MOBILE',
+  });
   await enqueueSerpApiCapture({
     opportunityId,
     requestId,
-    requestedLocation,
+    locationProfileId,
     device,
     reviewPolicy: 'OWNER_REVIEW_REQUIRED',
   });

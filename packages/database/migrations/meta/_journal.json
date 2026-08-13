@@ -92,6 +92,13 @@
       "when": 1786561200000,
       "tag": "0012_serp_owner_review_policy",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1786608000000,
+      "tag": "0013_verified_serp_locations",
+      "breakpoints": true
     }
   ]
 }

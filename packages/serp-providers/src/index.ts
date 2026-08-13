@@ -9,6 +9,19 @@ export type FeatureState = 'PRESENT' | 'ABSENT' | 'UNKNOWN';
 export const reviewPolicies = ['AUTO_ACCEPT_IF_POLICY_ALLOWS', 'OWNER_REVIEW_REQUIRED'] as const;
 export type SerpReviewPolicy = (typeof reviewPolicies)[number];
 
+export type VerifiedSerpLocationSnapshot = {
+  locationProfileId: string;
+  requestedLocationLabel: string;
+  provider: ProviderName;
+  canonicalProviderLocation: string;
+  providerLocationId: string;
+  verifiedPrecision: LocationPrecision;
+  countryCode: string;
+  timezone: string;
+  verifiedAt: string;
+  verificationSource: string;
+};
+
 export type SerpProviderCapabilities = {
   supportsCountry: boolean;
   supportsCity: boolean;
@@ -385,6 +398,12 @@ export class SerpApiProvider extends HttpProvider {
       throw new SerpProviderError(
         'MALFORMED_RESPONSE',
         'Provider query failed Unicode round-trip validation',
+        true,
+      );
+    if (url.searchParams.get('location') !== requirement.requestedLocation)
+      throw new SerpProviderError(
+        'MALFORMED_RESPONSE',
+        'Provider location failed Unicode round-trip validation',
         true,
       );
     const body = object.parse(await this.post(url.toString(), { method: 'GET', signal }));

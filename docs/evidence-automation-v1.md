@@ -1,5 +1,11 @@
 # Evidence Automation V1
 
+## Verified SERP location transport
+
+SERP API jobs use a persisted `serp_location_profiles` record rather than browser-supplied provider location text. The opportunity UI submits only the profile UUID. The server resolves the active site-scoped profile and snapshots its owner label, provider, canonical provider location, provider location ID, verified precision, country code, timezone, verification timestamp, and verification source into both the capture and `FETCH_SERP_API` job identity.
+
+The worker compares the job snapshot, capture snapshot, and still-active profile before reserving quota. A provider mismatch, inactive profile, altered snapshot, missing provider identity, or precision downgrade blocks execution before reservation. SerpApi receives the canonical `location` string; the provider location ID remains internal provenance because the Google Search adapter does not use an independently verified location-ID search parameter.
+
 Evidence Automation V1 adds two zero-AI owner workflows without changing the explicit V3 reevaluation gate.
 
 ## Reusable owner facts

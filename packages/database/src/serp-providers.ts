@@ -8,6 +8,7 @@ import {
   type SerpEvidenceRequirement,
   type SerpProviderCapabilities,
   type SerpReviewPolicy,
+  type VerifiedSerpLocationSnapshot,
 } from '@seo-agent/serp-providers';
 import { evidenceHash, recordEvidenceItem } from './evidence-resolution';
 import { getDatabase } from './index';
@@ -32,6 +33,50 @@ export function providerCredentialsConfigured(env: NodeJS.ProcessEnv = process.e
     SERPSTACK: Boolean(env.SERPSTACK_API_KEY),
     SERPER: Boolean(env.SERPER_API_KEY),
   } satisfies Record<ProviderName, boolean>;
+}
+
+export async function verifiedSerpLocationProfilesForOpportunity(
+  opportunityId: string,
+  pool: Pool = getDatabase().pool,
+) {
+  return (
+    await pool.query(
+      `SELECT p.* FROM serp_location_profiles p JOIN opportunities o ON o.site_id=p.site_id
+       WHERE o.id=$1 AND p.status='ACTIVE' ORDER BY p.owner_label,p.provider`,
+      [opportunityId],
+    )
+  ).rows;
+}
+
+function locationSnapshot(profile: Record<string, unknown>): VerifiedSerpLocationSnapshot {
+  return {
+    locationProfileId: String(profile.id),
+    requestedLocationLabel: String(profile.owner_label),
+    provider: profile.provider as ProviderName,
+    canonicalProviderLocation: String(profile.canonical_location),
+    providerLocationId: String(profile.provider_location_id),
+    verifiedPrecision: profile.precision as VerifiedSerpLocationSnapshot['verifiedPrecision'],
+    countryCode: String(profile.country_code),
+    timezone: String(profile.timezone),
+    verifiedAt: new Date(String(profile.verified_at)).toISOString(),
+    verificationSource: String(profile.verification_source),
+  };
+}
+
+function assertVerifiedLocation(
+  requirement: SerpEvidenceRequirement,
+  snapshot: VerifiedSerpLocationSnapshot,
+  status: unknown,
+) {
+  if (status !== 'ACTIVE') throw new Error('SERP_LOCATION_PROFILE_INACTIVE');
+  if (snapshot.provider !== 'SERPAPI') throw new Error('SERP_LOCATION_PROVIDER_MISMATCH');
+  if (!snapshot.canonicalProviderLocation.trim() || !snapshot.providerLocationId.trim())
+    throw new Error('SERP_LOCATION_IDENTITY_UNVERIFIED');
+  if (
+    requirement.requiredPrecision === 'CITY' &&
+    !['CITY', 'COORDINATE'].includes(snapshot.verifiedPrecision)
+  )
+    throw new Error('SERP_LOCATION_PRECISION_DOWNGRADE');
 }
 
 export async function serpProviderStatus(
@@ -107,15 +152,16 @@ function requestFingerprint(
   requestId: string,
   requirement: SerpEvidenceRequirement,
   reviewPolicy: SerpReviewPolicy,
+  location: VerifiedSerpLocationSnapshot,
 ) {
-  return evidenceHash({ requestId, reviewPolicy, ...requirement });
+  return evidenceHash({ requestId, reviewPolicy, location, ...requirement });
 }
 
 export async function enqueueSerpApiCapture(
   input: {
     opportunityId: string;
     requestId: string;
-    requestedLocation: string;
+    locationProfileId: string;
     device?: SerpDevice;
     maxOrganicResults?: 20 | 30;
     reviewPolicy?: SerpReviewPolicy;
@@ -134,29 +180,40 @@ export async function enqueueSerpApiCapture(
     throw new Error('SERP evidence request required');
   const targetDomain = new URL(row.url).hostname.replace(/^www\./, '').toLowerCase();
   if (targetDomain !== 'amphon.co.th') throw new Error('SERP API target is not approved');
+  const profile = (
+    await pool.query(`SELECT * FROM serp_location_profiles WHERE id=$1 AND site_id=$2`, [
+      input.locationProfileId,
+      row.site_id,
+    ])
+  ).rows[0];
+  if (!profile) throw new Error('Verified SERP location profile required');
+  const location = locationSnapshot(profile);
   const requirement = classifyEvidenceRequirement({
     query: String(row.query),
-    requestedLocation: input.requestedLocation,
+    requestedLocation: location.canonicalProviderLocation,
     device: input.device,
     targetDomain,
     maxOrganicResults: input.maxOrganicResults,
   });
+  assertVerifiedLocation(requirement, location, profile.status);
   const reviewPolicy = input.reviewPolicy ?? 'AUTO_ACCEPT_IF_POLICY_ALLOWS';
   const status = await serpProviderStatus(configured, pool);
   const provider = selectProvider(
     requirement,
-    status.map((item) => ({
-      provider: item.provider,
-      enabled: item.enabled,
-      configured: item.credential_configured,
-      health: item.effective_health,
-      remaining: item.remaining,
-      priority: item.priority,
-      capabilities: item.capabilities as SerpProviderCapabilities,
-    })),
+    status
+      .filter((item) => item.provider === location.provider)
+      .map((item) => ({
+        provider: item.provider,
+        enabled: item.enabled,
+        configured: item.credential_configured,
+        health: item.effective_health,
+        remaining: item.remaining,
+        priority: item.priority,
+        capabilities: item.capabilities as SerpProviderCapabilities,
+      })),
   );
   if (!provider) return { queued: false as const, fallback: 'OWNER_BROWSER' as const, requirement };
-  const fingerprint = requestFingerprint(input.requestId, requirement, reviewPolicy);
+  const fingerprint = requestFingerprint(input.requestId, requirement, reviewPolicy, location);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -171,8 +228,10 @@ export async function enqueueSerpApiCapture(
     }
     const capture = await client.query(
       `INSERT INTO serp_api_captures(site_id,opportunity_id,request_id,provider,request_fingerprint,
-       query,requested_location,required_precision,device,target_domain,max_organic_results,review_policy)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+       query,requested_location,required_precision,device,target_domain,max_organic_results,review_policy,
+       location_profile_id,requested_location_label,canonical_provider_location,provider_location_id,
+       verified_precision,country_code,location_timezone,location_verified_at,location_verification_source)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING *`,
       [
         row.site_id,
         input.opportunityId,
@@ -186,6 +245,15 @@ export async function enqueueSerpApiCapture(
         requirement.targetDomain,
         requirement.maxOrganicResults,
         reviewPolicy,
+        location.locationProfileId,
+        location.requestedLocationLabel,
+        location.canonicalProviderLocation,
+        location.providerLocationId,
+        location.verifiedPrecision,
+        location.countryCode,
+        location.timezone,
+        location.verifiedAt,
+        location.verificationSource,
       ],
     );
     const job = await client.query(
@@ -197,6 +265,8 @@ export async function enqueueSerpApiCapture(
           requestId: input.requestId,
           opportunityId: input.opportunityId,
           reviewPolicy,
+          ...location,
+          requiredPrecision: requirement.requiredPrecision,
         }),
       ],
     );
@@ -226,6 +296,10 @@ export async function reserveSerpProviderAttempt(
   captureId: string,
   configured = providerCredentialsConfigured(),
   pool: Pool = getDatabase().pool,
+  expected?: Partial<VerifiedSerpLocationSnapshot> & {
+    reviewPolicy?: SerpReviewPolicy;
+    requiredPrecision?: SerpEvidenceRequirement['requiredPrecision'];
+  },
 ) {
   assertFreeOnlyMode();
   const client = await pool.connect();
@@ -233,7 +307,14 @@ export async function reserveSerpProviderAttempt(
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock(820243)');
     const capture = (
-      await client.query(`SELECT * FROM serp_api_captures WHERE id=$1 FOR UPDATE`, [captureId])
+      await client.query(
+        `SELECT c.*,p.status location_profile_status,p.provider live_location_provider,
+          p.canonical_location live_canonical_location,p.provider_location_id live_provider_location_id,
+          p.precision live_verified_precision
+         FROM serp_api_captures c LEFT JOIN serp_location_profiles p ON p.id=c.location_profile_id
+         WHERE c.id=$1 FOR UPDATE OF c`,
+        [captureId],
+      )
     ).rows[0];
     if (!capture || !['QUEUED', 'FETCHING'].includes(capture.status))
       throw new Error('Active SERP API capture required');
@@ -245,6 +326,43 @@ export async function reserveSerpProviderAttempt(
       targetDomain: capture.target_domain,
       maxOrganicResults: capture.max_organic_results,
     };
+    const snapshot: VerifiedSerpLocationSnapshot = {
+      locationProfileId: String(capture.location_profile_id ?? ''),
+      requestedLocationLabel: String(capture.requested_location_label ?? ''),
+      provider: capture.provider as ProviderName,
+      canonicalProviderLocation: String(capture.canonical_provider_location ?? ''),
+      providerLocationId: String(capture.provider_location_id ?? ''),
+      verifiedPrecision: capture.verified_precision,
+      countryCode: String(capture.country_code ?? ''),
+      timezone: String(capture.location_timezone ?? ''),
+      verifiedAt: new Date(capture.location_verified_at).toISOString(),
+      verificationSource: String(capture.location_verification_source ?? ''),
+    };
+    assertVerifiedLocation(requirement, snapshot, capture.location_profile_status);
+    if (
+      expected &&
+      (expected.reviewPolicy !== capture.review_policy ||
+        expected.locationProfileId !== snapshot.locationProfileId ||
+        expected.provider !== snapshot.provider ||
+        expected.canonicalProviderLocation !== snapshot.canonicalProviderLocation ||
+        expected.providerLocationId !== snapshot.providerLocationId ||
+        expected.verifiedPrecision !== snapshot.verifiedPrecision ||
+        expected.countryCode !== snapshot.countryCode ||
+        expected.timezone !== snapshot.timezone ||
+        expected.requestedLocationLabel !== snapshot.requestedLocationLabel ||
+        expected.verifiedAt !== snapshot.verifiedAt ||
+        expected.verificationSource !== snapshot.verificationSource ||
+        expected.requiredPrecision !== requirement.requiredPrecision)
+    )
+      throw new Error('SERP_LOCATION_JOB_IDENTITY_MISMATCH');
+    if (
+      capture.requested_location !== snapshot.canonicalProviderLocation ||
+      capture.live_location_provider !== snapshot.provider ||
+      capture.live_canonical_location !== snapshot.canonicalProviderLocation ||
+      capture.live_provider_location_id !== snapshot.providerLocationId ||
+      capture.live_verified_precision !== snapshot.verifiedPrecision
+    )
+      throw new Error('SERP_LOCATION_SNAPSHOT_MISMATCH');
     const rows = await client.query(
       `SELECT c.*,p.id period_id,p.configured_allowance-coalesce(p.used,0)-coalesce(p.reserved,0) remaining
        FROM serp_provider_configs c LEFT JOIN LATERAL (SELECT * FROM serp_provider_usage_periods p

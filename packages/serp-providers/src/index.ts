@@ -49,20 +49,36 @@ export type SerpEvidenceRequirement = {
   device: SerpDevice;
   targetDomain: string;
   maxOrganicResults: 20 | 30;
+  requestedVerifiedPrecision?: LocationPrecision;
   intentClass?: SerpIntentClass;
   evidencePolicy?: 'STANDARD_SERP' | 'HYPERLOCAL_SERP_REQUIRED';
 };
 
 export type SerpIntentClass = 'NORMAL' | 'HYPERLOCAL';
 export type SerpEvidenceTrustRole = 'PRIMARY_ELIGIBLE' | 'SUPPORTING_ONLY';
+export type SerpCoverageStatus = 'EMPTY' | 'PARTIAL' | `COMPLETE_THROUGH_${number}`;
+export type SerpTargetStatus =
+  | 'TARGET_FOUND'
+  | 'TARGET_NOT_FOUND_IN_RETURNED_RESULTS'
+  | 'TARGET_NOT_FOUND_THROUGH_CONFIRMED_DEPTH'
+  | 'TARGET_UNKNOWN';
+export type SerpOwnerComparison =
+  | 'EXACT'
+  | 'CLOSE'
+  | 'COMPATIBLE_WITH_OWNER_OBSERVATION'
+  | 'MATERIAL_CONFLICT'
+  | 'INSUFFICIENT_DATA';
 
 export type NormalizedSerpResult = {
   provider: ProviderName;
   providerRequestId: string | null;
   query: string;
   requestedLocation: string;
+  providerLocationRequested: string | null;
   providerLocationUsed: string | null;
-  locationPrecision: LocationPrecision;
+  requestedVerifiedPrecision: LocationPrecision;
+  providerReportedPrecision: LocationPrecision;
+  effectiveEvidenceContext: string;
   device: SerpDevice;
   capturedAt: string;
   organicResults: Array<{
@@ -72,6 +88,12 @@ export type NormalizedSerpResult = {
     url: string;
     displayedUrl: string | null;
   }>;
+  requestedOrganicLimit: number;
+  actualOrganicCount: number;
+  maximumObservedOrganicPosition: number;
+  paginationStart: number;
+  paginationPerformed: boolean;
+  coverageStatus: SerpCoverageStatus;
   features: {
     ads: FeatureState;
     aiOverview: FeatureState;
@@ -80,6 +102,9 @@ export type NormalizedSerpResult = {
     shopping: FeatureState;
   };
   targetFound: boolean;
+  targetStatus: SerpTargetStatus;
+  rankLowerBoundExclusive: number | null;
+  exactRankKnown: boolean;
   targetOrganicPosition: number | null;
   targetUrl: string | null;
   targetTitle: string | null;
@@ -208,10 +233,42 @@ export function materialSerpObservationConflict(
   ownerPosition: number | null,
   apiPosition: number | null,
   apiTargetFound: boolean,
+  maximumObservedOrganicPosition?: number,
 ) {
-  if (ownerPosition === null || !Number.isFinite(ownerPosition)) return false;
-  if (!apiTargetFound || apiPosition === null) return true;
-  return Math.abs(ownerPosition - apiPosition) >= 3;
+  return (
+    compareOwnerSerpObservation(
+      ownerPosition,
+      apiPosition,
+      apiTargetFound,
+      maximumObservedOrganicPosition,
+    ).comparison === 'MATERIAL_CONFLICT'
+  );
+}
+
+export function compareOwnerSerpObservation(
+  ownerPosition: number | null,
+  apiPosition: number | null,
+  apiTargetFound: boolean,
+  maximumObservedOrganicPosition?: number,
+): { comparison: SerpOwnerComparison; reason: string } {
+  if (ownerPosition === null || !Number.isFinite(ownerPosition))
+    return { comparison: 'INSUFFICIENT_DATA', reason: 'OWNER_POSITION_UNKNOWN' };
+  if (apiTargetFound && apiPosition !== null) {
+    const delta = Math.abs(ownerPosition - apiPosition);
+    return delta === 0
+      ? { comparison: 'EXACT', reason: 'SAME_POSITION' }
+      : delta < 3
+        ? { comparison: 'CLOSE', reason: 'POSITION_DELTA_BELOW_3' }
+        : { comparison: 'MATERIAL_CONFLICT', reason: 'POSITION_DELTA_AT_LEAST_3' };
+  }
+  if (!maximumObservedOrganicPosition || maximumObservedOrganicPosition < 1)
+    return { comparison: 'INSUFFICIENT_DATA', reason: 'NO_OBSERVED_ORGANIC_DEPTH' };
+  return ownerPosition > maximumObservedOrganicPosition
+    ? {
+        comparison: 'COMPATIBLE_WITH_OWNER_OBSERVATION',
+        reason: 'OWNER_POSITION_OUTSIDE_OBSERVED_DEPTH',
+      }
+    : { comparison: 'MATERIAL_CONFLICT', reason: 'OWNER_POSITION_WITHIN_OBSERVED_DEPTH' };
 }
 
 export function selectProvider(
@@ -258,8 +315,9 @@ function normalized(
   requirement: SerpEvidenceRequirement,
   input: {
     requestId?: string | null;
+    providerLocationRequested?: string | null;
     providerLocationUsed?: string | null;
-    precision: LocationPrecision;
+    providerReportedPrecision?: LocationPrecision;
     organic: Array<z.infer<typeof organicSchema>>;
     ads?: unknown;
     aiOverview?: unknown;
@@ -285,6 +343,30 @@ function normalized(
     const host = new URL(entry.url).hostname.toLowerCase().replace(/^www\./, '');
     return host === requirement.targetDomain;
   });
+  const actualOrganicCount = input.organic.length;
+  const maximumObservedOrganicPosition = input.organic.reduce(
+    (maximum, entry) => Math.max(maximum, entry.position),
+    0,
+  );
+  const observedPositions = new Set(input.organic.map((entry) => entry.position));
+  let confirmedObservedDepth = 0;
+  while (observedPositions.has(confirmedObservedDepth + 1)) confirmedObservedDepth += 1;
+  const coverageStatus: SerpCoverageStatus =
+    actualOrganicCount === 0
+      ? 'EMPTY'
+      : actualOrganicCount >= requirement.maxOrganicResults &&
+          confirmedObservedDepth >= requirement.maxOrganicResults
+        ? `COMPLETE_THROUGH_${requirement.maxOrganicResults}`
+        : 'PARTIAL';
+  const targetStatus: SerpTargetStatus = target
+    ? 'TARGET_FOUND'
+    : coverageStatus.startsWith('COMPLETE_THROUGH_')
+      ? 'TARGET_NOT_FOUND_THROUGH_CONFIRMED_DEPTH'
+      : actualOrganicCount > 0
+        ? 'TARGET_NOT_FOUND_IN_RETURNED_RESULTS'
+        : 'TARGET_UNKNOWN';
+  const requestedVerifiedPrecision =
+    requirement.requestedVerifiedPrecision ?? requirement.requiredPrecision;
   const state = (value: unknown, supported: boolean): FeatureState =>
     !supported
       ? 'UNKNOWN'
@@ -300,11 +382,20 @@ function normalized(
     providerRequestId: input.requestId ?? null,
     query: requirement.query,
     requestedLocation: requirement.requestedLocation,
+    providerLocationRequested: input.providerLocationRequested ?? requirement.requestedLocation,
     providerLocationUsed: input.providerLocationUsed ?? null,
-    locationPrecision: input.precision,
+    requestedVerifiedPrecision,
+    providerReportedPrecision: input.providerReportedPrecision ?? 'UNKNOWN',
+    effectiveEvidenceContext: `VERIFIED_${requestedVerifiedPrecision}_REQUEST`,
     device: requirement.device,
     capturedAt: new Date().toISOString(),
     organicResults,
+    requestedOrganicLimit: requirement.maxOrganicResults,
+    actualOrganicCount,
+    maximumObservedOrganicPosition,
+    paginationStart: 0,
+    paginationPerformed: false,
+    coverageStatus,
     features: {
       ads: state(input.ads, input.supported.ads === true),
       aiOverview: state(input.aiOverview, input.supported.aiOverview === true),
@@ -313,6 +404,9 @@ function normalized(
       shopping: state(input.shopping, input.supported.shopping === true),
     },
     targetFound: Boolean(target),
+    targetStatus,
+    rankLowerBoundExclusive: target ? null : confirmedObservedDepth || null,
+    exactRankKnown: Boolean(target),
     targetOrganicPosition: target?.position ?? null,
     targetUrl: target?.url ?? null,
     targetTitle: target?.title ?? null,
@@ -637,8 +731,9 @@ export class SerpApiProvider extends HttpProvider {
     const metadata = object.catch({}).parse(body.search_metadata);
     return normalized(this.name, requirement, {
       requestId: metadata.id as string | undefined,
+      providerLocationRequested: params.location_requested as string | undefined,
       providerLocationUsed: params.location_used as string | undefined,
-      precision: requirement.requiredPrecision,
+      providerReportedPrecision: 'UNKNOWN',
       organic: organicList(body.organic_results, 'link'),
       ads: body.ads,
       aiOverview: body.ai_overview,
@@ -681,8 +776,9 @@ export class SerpstackProvider extends HttpProvider {
     }
     const params = object.catch({}).parse(body.search_parameters);
     return normalized(this.name, requirement, {
+      providerLocationRequested: requirement.requestedLocation,
       providerLocationUsed: params.location as string | undefined,
-      precision: requirement.requiredPrecision,
+      providerReportedPrecision: 'UNKNOWN',
       organic: organicList(body.organic_results, 'url'),
       ads: body.ads,
       mapPack: body.local_results,
@@ -723,7 +819,7 @@ export class SerperProvider extends HttpProvider {
       );
     }
     return normalized(this.name, requirement, {
-      precision: 'COUNTRY',
+      providerReportedPrecision: 'UNKNOWN',
       organic: organicList(body.organic, 'link'),
       ads: body.ads,
       mapPack: body.places,

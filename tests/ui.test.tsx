@@ -404,14 +404,24 @@ describe('server-rendered UI foundations', () => {
           review_policy: 'OWNER_REVIEW_REQUIRED',
           query: 'รับซื้อโน้ตบุ๊ค ใกล้ฉัน',
           requested_location: 'Ubon Ratchathani,Ubon Ratchathani,Thailand',
+          requested_location_label: 'Ubon Ratchathani, Thailand',
+          canonical_provider_location: 'Ubon Ratchathani,Ubon Ratchathani,Thailand',
           provider_location_used: 'Ubon Ratchathani,Thailand',
-          location_precision: 'CITY',
+          verified_precision: 'CITY',
+          provider_reported_precision: 'UNKNOWN',
+          effective_evidence_context: 'VERIFIED_CITY_REQUEST',
           device: 'MOBILE',
           country_code: 'th',
           captured_at: new Date('2026-08-13T14:06:03.652Z'),
           target_found: false,
           target_organic_position: null,
           max_organic_results: 20,
+          actual_organic_count: 20,
+          maximum_observed_organic_position: 20,
+          coverage_status: 'COMPLETE_THROUGH_20',
+          target_status: 'TARGET_NOT_FOUND_THROUGH_CONFIRMED_DEPTH',
+          rank_lower_bound_exclusive: 20,
+          exact_rank_known: false,
           conflict: true,
           normalized_result: { features: { mapPack: 'PRESENT' } },
         },
@@ -428,7 +438,7 @@ describe('server-rendered UI foundations', () => {
     expect(html).toContain('API capture:');
     expect(html).toContain('SERP_OBSERVATION_CONFLICT');
     expect(html).toContain('AMPHON ~#2');
-    expect(html).toContain('AMPHON not found Top 20');
+    expect(html).toContain('AMPHON not found in returned positions 1–20');
     expect(html).toContain('<strong>Device:</strong> MOBILE');
     expect(html).toContain('<strong>Language:</strong> Thai (th)');
     expect(html).toContain('<strong>Country:</strong> th');

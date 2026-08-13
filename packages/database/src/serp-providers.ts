@@ -1,9 +1,9 @@
 import type { Pool, PoolClient } from 'pg';
 import {
+  compareOwnerSerpObservation,
   capabilityMismatch,
   classifyEvidenceRequirement,
   classifySerpIntent,
-  materialSerpObservationConflict,
   serpEvidenceTrust,
   selectProvider,
   type NormalizedSerpResult,
@@ -350,6 +350,7 @@ export async function reserveSerpProviderAttempt(
       device: capture.device,
       targetDomain: capture.target_domain,
       maxOrganicResults: capture.max_organic_results,
+      requestedVerifiedPrecision: capture.verified_precision,
       intentClass:
         (capture.intent_class as SerpEvidenceRequirement['intentClass']) ??
         classifySerpIntent({ query: String(capture.query) }),
@@ -549,22 +550,35 @@ export async function persistSerpApiSuccess(
       const position = Number(row.evidence?.approximatePosition);
       return Number.isFinite(position) ? [position] : [];
     });
-    const conflict = ownerPositions.some((position) =>
-      materialSerpObservationConflict(position, result.targetOrganicPosition, result.targetFound),
-    );
+    const ownerComparisons = ownerPositions.map((position) => ({
+      ownerPosition: position,
+      ...compareOwnerSerpObservation(
+        position,
+        result.targetOrganicPosition,
+        result.targetFound,
+        result.targetFound
+          ? result.maximumObservedOrganicPosition
+          : (result.rankLowerBoundExclusive ?? 0),
+      ),
+    }));
+    const conflict = ownerComparisons.some(({ comparison }) => comparison === 'MATERIAL_CONFLICT');
     const intentClass =
       capture.intent_class === 'HYPERLOCAL' ||
       classifySerpIntent({ query: String(capture.query) }) === 'HYPERLOCAL'
         ? 'HYPERLOCAL'
         : 'NORMAL';
+    const verifiedCityRequest = result.requestedVerifiedPrecision === 'CITY';
+    const evidenceQuality = verifiedCityRequest
+      ? 'SERP_API_VERIFIED_CITY_REQUEST'
+      : 'SERP_API_COUNTRY';
     const trustRole = serpEvidenceTrust(
       intentClass,
-      result.locationPrecision === 'CITY' ? 'SERP_API_CITY' : 'SERP_API_COUNTRY',
+      verifiedCityRequest ? 'SERP_API_CITY' : 'SERP_API_COUNTRY',
     );
     const evidence = {
       ...result,
       provenance: 'SERP_API_CAPTURED',
-      evidenceQuality: result.locationPrecision === 'CITY' ? 'SERP_API_CITY' : 'SERP_API_COUNTRY',
+      evidenceQuality,
       conflict: conflict ? 'SERP_OBSERVATION_CONFLICT' : null,
       intentClass,
       trustRole,
@@ -594,13 +608,18 @@ export async function persistSerpApiSuccess(
       conflict=$12,captured_at=$13::timestamptz,
       expires_at=$13::timestamptz+($14::int*interval '1 hour'),intent_class=$16,trust_role=$17,
       conflict_detail=$18::jsonb,provider_http_status=$19,provider_search_status=$20,
-      provider_latency_ms=$21,provider_response_content_type=$22,updated_at=now() WHERE id=$1`,
+      provider_latency_ms=$21,provider_response_content_type=$22,
+      actual_organic_count=$23,maximum_observed_organic_position=$24,pagination_start=$25,
+      pagination_performed=$26,coverage_status=$27,target_status=$28,
+      rank_lower_bound_exclusive=$29,exact_rank_known=$30,provider_location_requested=$31,
+      provider_reported_precision=$32,effective_evidence_context=$33,owner_comparison=$34,
+      updated_at=now() WHERE id=$1`,
       [
         captureId,
         JSON.stringify(evidence),
         result.providerRequestId,
         result.providerLocationUsed,
-        result.locationPrecision,
+        result.providerReportedPrecision,
         result.targetFound,
         result.targetOrganicPosition,
         result.targetUrl,
@@ -617,16 +636,29 @@ export async function persistSerpApiSuccess(
           ? JSON.stringify({
               type: 'SERP_OBSERVATION_CONFLICT',
               ownerPositions,
+              ownerComparisons,
               providerTargetState: result.targetFound
                 ? `POSITION_${result.targetOrganicPosition}`
-                : `TARGET_NOT_FOUND_TOP_${capture.max_organic_results}`,
-              policyVersion: 'hyperlocal-serp-trust-v1',
+                : `${result.targetStatus}_OBSERVED_MAX_${result.maximumObservedOrganicPosition}`,
+              policyVersion: 'serp-coverage-location-semantics-v1',
             })
           : null,
         result.providerHttpStatus ?? null,
         result.providerSearchStatus ?? null,
         result.providerLatencyMs ?? null,
         result.providerResponseContentType ?? null,
+        result.actualOrganicCount,
+        result.maximumObservedOrganicPosition,
+        result.paginationStart,
+        result.paginationPerformed,
+        result.coverageStatus,
+        result.targetStatus,
+        result.rankLowerBoundExclusive,
+        result.exactRankKnown,
+        result.providerLocationRequested,
+        result.providerReportedPrecision,
+        result.effectiveEvidenceContext,
+        ownerComparisons[0]?.comparison ?? 'INSUFFICIENT_DATA',
       ],
     );
     await client.query(
@@ -669,7 +701,10 @@ export async function acceptSerpApiCapture(captureId: string, pool: Pool = getDa
       {
         ...result,
         provenance: 'OWNER_CONFIRMED_SERP_API_CAPTURE',
-        evidenceQuality: result.locationPrecision === 'CITY' ? 'SERP_API_CITY' : 'SERP_API_COUNTRY',
+        evidenceQuality:
+          result.requestedVerifiedPrecision === 'CITY'
+            ? 'SERP_API_VERIFIED_CITY_REQUEST'
+            : 'SERP_API_COUNTRY',
         conflict: capture.conflict ? 'SERP_OBSERVATION_CONFLICT' : null,
         ownerConfirmedAt: new Date().toISOString(),
       },

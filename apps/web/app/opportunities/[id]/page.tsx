@@ -259,6 +259,10 @@ function EvidenceRequiredPanel({
             (capture) => capture.request_id === request.id,
           );
           const latestApiCapture = apiCaptures[0] as Record<string, unknown> | undefined;
+          const normalizedApiResult = (latestApiCapture?.normalized_result ?? {}) as Record<
+            string,
+            unknown
+          >;
           const location = locations.find(
             (profile) => profile.provider === 'SERPAPI' && profile.precision === 'CITY',
           );
@@ -477,17 +481,27 @@ function EvidenceRequiredPanel({
                   </p>
                   <p>
                     <strong>Requested location:</strong>{' '}
-                    {String(latestApiCapture.requested_location)}
+                    {String(latestApiCapture.requested_location_label)}
+                  </p>
+                  <p>
+                    <strong>Canonical location requested:</strong>{' '}
+                    {String(latestApiCapture.canonical_provider_location)}
                   </p>
                   <p>
                     <strong>Provider location used:</strong>{' '}
                     {String(latestApiCapture.provider_location_used ?? 'UNKNOWN')}
                   </p>
                   <p>
-                    <strong>Precision:</strong>{' '}
-                    {String(
-                      latestApiCapture.location_precision ?? latestApiCapture.required_precision,
-                    )}
+                    <strong>Verified request precision:</strong>{' '}
+                    {String(latestApiCapture.verified_precision ?? 'UNKNOWN')}
+                  </p>
+                  <p>
+                    <strong>Provider-reported precision:</strong>{' '}
+                    {String(latestApiCapture.provider_reported_precision ?? 'UNKNOWN')}
+                  </p>
+                  <p>
+                    <strong>Effective request context:</strong>{' '}
+                    {String(latestApiCapture.effective_evidence_context ?? 'UNKNOWN')}
                   </p>
                   <p>
                     <strong>Device:</strong> {String(latestApiCapture.device)}
@@ -505,8 +519,38 @@ function EvidenceRequiredPanel({
                       : 'PENDING'}
                   </p>
                   <p>
-                    <strong>AMPHON position:</strong>{' '}
-                    {String(latestApiCapture.target_organic_position ?? 'NOT FOUND / UNKNOWN')}
+                    <strong>Requested results:</strong>{' '}
+                    {String(latestApiCapture.max_organic_results)}
+                  </p>
+                  <p>
+                    <strong>Organic results returned:</strong>{' '}
+                    {String(latestApiCapture.actual_organic_count ?? 'UNKNOWN')}
+                  </p>
+                  <p>
+                    <strong>Observed rank depth:</strong>{' '}
+                    {Number(latestApiCapture.maximum_observed_organic_position ?? 0) > 0
+                      ? `1–${String(latestApiCapture.maximum_observed_organic_position)}`
+                      : 'NONE'}
+                  </p>
+                  <p>
+                    <strong>Coverage:</strong>{' '}
+                    {String(latestApiCapture.coverage_status ?? 'UNKNOWN')}
+                  </p>
+                  <p>
+                    <strong>AMPHON:</strong>{' '}
+                    {latestApiCapture.target_found
+                      ? `Found at #${String(latestApiCapture.target_organic_position)}`
+                      : latestApiCapture.target_status === 'TARGET_NOT_FOUND_IN_RETURNED_RESULTS'
+                        ? 'Not found in returned results'
+                        : String(latestApiCapture.target_status ?? 'UNKNOWN')}
+                  </p>
+                  <p>
+                    <strong>Rank conclusion:</strong>{' '}
+                    {latestApiCapture.exact_rank_known
+                      ? `Exact rank #${String(latestApiCapture.target_organic_position)}`
+                      : latestApiCapture.rank_lower_bound_exclusive
+                        ? `> ${String(latestApiCapture.rank_lower_bound_exclusive)} only`
+                        : 'Unknown'}
                   </p>
                   <p>
                     <strong>URL:</strong> {String(latestApiCapture.target_url ?? '—')}
@@ -522,8 +566,7 @@ function EvidenceRequiredPanel({
                   </p>
                   <pre>
                     {JSON.stringify(
-                      ((latestApiCapture.normalized_result as Record<string, unknown> | null)
-                        ?.features as Record<string, unknown> | undefined) ?? {},
+                      (normalizedApiResult.features as Record<string, unknown> | undefined) ?? {},
                       null,
                       2,
                     )}
@@ -545,7 +588,20 @@ function EvidenceRequiredPanel({
                         <strong>API City {String(latestApiCapture.device)}:</strong>{' '}
                         {latestApiCapture.target_found
                           ? `AMPHON #${String(latestApiCapture.target_organic_position)}`
-                          : `AMPHON not found Top ${String(latestApiCapture.max_organic_results)}`}
+                          : `AMPHON not found in returned positions 1–${String(
+                              latestApiCapture.maximum_observed_organic_position ?? 'UNKNOWN',
+                            )}`}
+                      </p>
+                    </div>
+                  ) : null}
+                  {latestApiCapture.owner_comparison === 'COMPATIBLE_WITH_OWNER_OBSERVATION' ? (
+                    <div className="notice">
+                      <strong>Compatible with owner observation</strong>
+                      <p>
+                        Owner ~#{ownerPositions.join(' / ~#') || 'UNKNOWN'} is outside the API's
+                        observed depth of 1–
+                        {String(latestApiCapture.maximum_observed_organic_position)}. Coverage is
+                        insufficient for an exact-rank comparison.
                       </p>
                     </div>
                   ) : null}

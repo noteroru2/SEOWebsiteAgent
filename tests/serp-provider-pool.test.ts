@@ -6,6 +6,7 @@ import {
   capabilityMismatch,
   classifyEvidenceRequirement,
   classifySerpIntent,
+  compareOwnerSerpObservation,
   materialSerpObservationConflict,
   PROVIDER_CAPABILITIES,
   SerpApiProvider,
@@ -113,8 +114,12 @@ describe('capability-based free-only routing', () => {
     expect(serpEvidenceTrust('HYPERLOCAL', 'PLAYWRIGHT_EMULATED')).toBe('SUPPORTING_ONLY');
     expect(serpEvidenceTrust('NORMAL', 'SERP_API_CITY')).toBe('PRIMARY_ELIGIBLE');
   });
-  it('detects a material owner/API target-not-found disagreement', () => {
-    expect(materialSerpObservationConflict(2, null, false)).toBe(true);
+  it('bounds owner/API comparison by actual observed coverage', () => {
+    expect(materialSerpObservationConflict(24, null, false, 8)).toBe(false);
+    expect(compareOwnerSerpObservation(24, null, false, 8)).toMatchObject({
+      comparison: 'COMPATIBLE_WITH_OWNER_OBSERVATION',
+    });
+    expect(materialSerpObservationConflict(2, null, false, 20)).toBe(true);
     expect(materialSerpObservationConflict(2, 3, true)).toBe(false);
   });
   it('rejects every non-free billing mode', () => {
@@ -178,7 +183,10 @@ const providerResponse = (provider: 'SERPAPI' | 'SERPSTACK' | 'SERPER') => {
   if (provider === 'SERPAPI')
     return {
       search_metadata: { id: 'serpapi-id', status: 'Success' },
-      search_parameters: { location_used: 'Ubon Ratchathani,Thailand' },
+      search_parameters: {
+        location_requested: 'Ubon Ratchathani,Ubon Ratchathani,Thailand',
+        location_used: 'Ubon Ratchathani,Thailand',
+      },
       organic_results: organic,
       ads: [{}],
       ai_overview: { text: 'overview' },
@@ -227,11 +235,104 @@ describe.each([
     expect(result.device).toBe(input.device);
     expect(result.providerHttpStatus).toBe(200);
     expect(result.providerLatencyMs).toBeTypeOf('number');
+    expect(result.requestedOrganicLimit).toBe(20);
+    expect(result.actualOrganicCount).toBe(3);
+    expect(result.maximumObservedOrganicPosition).toBe(3);
+    expect(result.coverageStatus).toBe('PARTIAL');
+    expect(result.paginationPerformed).toBe(false);
+    expect(result.providerReportedPrecision).toBe('UNKNOWN');
+    expect(result.requestedVerifiedPrecision).toBe(input.requiredPrecision);
+    expect(result.effectiveEvidenceContext).toBe(`VERIFIED_${input.requiredPrecision}_REQUEST`);
+    expect(result.providerLocationRequested).toBe(input.requestedLocation);
     if (name === 'SERPAPI') expect(result.providerSearchStatus).toBe('Success');
     expect(JSON.stringify(result)).not.toContain('fixture-key');
     if (name === 'SERPAPI' || name === 'SERPSTACK')
       expect(new URL(requested!.url).searchParams.get('num')).toBe('20');
     else expect(JSON.parse(String(requested!.init?.body)).num).toBe(20);
+  });
+
+  it('models requested depth separately from returned coverage', async () => {
+    const payload = providerResponse(name) as Record<string, unknown>;
+    const organicKey = name === 'SERPER' ? 'organic' : 'organic_results';
+    payload[organicKey] = Array.from({ length: 8 }, (_, index) => ({
+      position: index + 1,
+      title: `Result ${index + 1}`,
+      snippet: null,
+      link: `https://example${index + 1}.com/`,
+      url: `https://example${index + 1}.com/`,
+    }));
+    const adapter = new Adapter(
+      'fixture-key',
+      (async () => new Response(JSON.stringify(payload), { status: 200 })) as typeof fetch,
+    );
+    const input =
+      name === 'SERPER'
+        ? { ...requirement, requiredPrecision: 'COUNTRY' as const, device: 'DESKTOP' as const }
+        : requirement;
+    const result = await adapter.search(input, AbortSignal.timeout(1_000));
+    expect(result).toMatchObject({
+      requestedOrganicLimit: 20,
+      actualOrganicCount: 8,
+      maximumObservedOrganicPosition: 8,
+      paginationStart: 0,
+      paginationPerformed: false,
+      coverageStatus: 'PARTIAL',
+      targetStatus: 'TARGET_NOT_FOUND_IN_RETURNED_RESULTS',
+      rankLowerBoundExclusive: 8,
+      exactRankKnown: false,
+    });
+  });
+
+  it('confirms requested depth only when all requested results are returned', async () => {
+    const payload = providerResponse(name) as Record<string, unknown>;
+    const organicKey = name === 'SERPER' ? 'organic' : 'organic_results';
+    payload[organicKey] = Array.from({ length: 20 }, (_, index) => ({
+      position: index + 1,
+      title: `Result ${index + 1}`,
+      snippet: null,
+      link: `https://complete${index + 1}.example/`,
+      url: `https://complete${index + 1}.example/`,
+    }));
+    const adapter = new Adapter(
+      'fixture-key',
+      (async () => new Response(JSON.stringify(payload), { status: 200 })) as typeof fetch,
+    );
+    const input =
+      name === 'SERPER'
+        ? { ...requirement, requiredPrecision: 'COUNTRY' as const, device: 'DESKTOP' as const }
+        : requirement;
+    const result = await adapter.search(input, AbortSignal.timeout(1_000));
+    expect(result.coverageStatus).toBe('COMPLETE_THROUGH_20');
+    expect(result.targetStatus).toBe('TARGET_NOT_FOUND_THROUGH_CONFIRMED_DEPTH');
+    expect(result.rankLowerBoundExclusive).toBe(20);
+  });
+
+  it('keeps a returned target position exact even when coverage is partial', async () => {
+    const payload = providerResponse(name) as Record<string, unknown>;
+    const organicKey = name === 'SERPER' ? 'organic' : 'organic_results';
+    payload[organicKey] = Array.from({ length: 8 }, (_, index) => ({
+      position: index + 1,
+      title: index === 4 ? 'AMPHON' : `Result ${index + 1}`,
+      snippet: null,
+      link: index === 4 ? 'https://amphon.co.th/ram' : `https://partial${index + 1}.example/`,
+      url: index === 4 ? 'https://amphon.co.th/ram' : `https://partial${index + 1}.example/`,
+    }));
+    const adapter = new Adapter(
+      'fixture-key',
+      (async () => new Response(JSON.stringify(payload), { status: 200 })) as typeof fetch,
+    );
+    const input =
+      name === 'SERPER'
+        ? { ...requirement, requiredPrecision: 'COUNTRY' as const, device: 'DESKTOP' as const }
+        : requirement;
+    const result = await adapter.search(input, AbortSignal.timeout(1_000));
+    expect(result).toMatchObject({
+      coverageStatus: 'PARTIAL',
+      targetStatus: 'TARGET_FOUND',
+      targetOrganicPosition: 5,
+      exactRankKnown: true,
+      rankLowerBoundExclusive: null,
+    });
   });
 
   it('rejects malformed responses deterministically', async () => {
@@ -442,11 +543,20 @@ const normalizedFixture = (): NormalizedSerpResult => ({
   providerRequestId: 'owner-review-fixture',
   query: requirement.query,
   requestedLocation: requirement.requestedLocation,
+  providerLocationRequested: requirement.requestedLocation,
   providerLocationUsed: 'Ubon Ratchathani,Ubon Ratchathani,Thailand',
-  locationPrecision: 'CITY',
+  requestedVerifiedPrecision: 'CITY',
+  providerReportedPrecision: 'UNKNOWN',
+  effectiveEvidenceContext: 'VERIFIED_CITY_REQUEST',
   device: 'MOBILE',
   capturedAt: new Date().toISOString(),
   organicResults: [],
+  requestedOrganicLimit: 20,
+  actualOrganicCount: 0,
+  maximumObservedOrganicPosition: 0,
+  paginationStart: 0,
+  paginationPerformed: false,
+  coverageStatus: 'EMPTY',
   features: {
     ads: 'UNKNOWN',
     aiOverview: 'UNKNOWN',
@@ -455,6 +565,9 @@ const normalizedFixture = (): NormalizedSerpResult => ({
     shopping: 'UNKNOWN',
   },
   targetFound: true,
+  targetStatus: 'TARGET_FOUND',
+  rankLowerBoundExclusive: null,
+  exactRankKnown: true,
   targetOrganicPosition: 2,
   targetUrl: 'https://amphon.co.th/notebook',
   targetTitle: 'AMPHON',
@@ -1462,12 +1575,12 @@ describe('transactional free quota and evidence integration', () => {
     );
     expect(attempt?.provider).toBe('SERPAPI');
     const result: NormalizedSerpResult = {
+      ...normalizedFixture(),
       provider: 'SERPAPI',
       providerRequestId: 'fixture',
       query: 'รับซื้อ ram',
       requestedLocation: requirement.requestedLocation,
       providerLocationUsed: 'Ubon Ratchathani,Thailand',
-      locationPrecision: 'CITY',
       device: 'MOBILE',
       capturedAt: new Date().toISOString(),
       organicResults: [
@@ -1500,7 +1613,7 @@ describe('transactional free quota and evidence integration', () => {
       )
     ).rows[0];
     expect(item.source_type).toBe('SERP_API_CAPTURED');
-    expect(item.evidence.evidenceQuality).toBe('SERP_API_CITY');
+    expect(item.evidence.evidenceQuality).toBe('SERP_API_VERIFIED_CITY_REQUEST');
     expect(
       (await deterministicEvidencePacket(opportunityId, database.pool)).evidencePacketHash,
     ).not.toBe(before.evidencePacketHash);
@@ -1654,12 +1767,12 @@ describe('transactional free quota and evidence integration', () => {
       database.pool,
     );
     const api = {
+      ...normalizedFixture(),
       provider: 'SERPAPI',
       providerRequestId: null,
       query: 'รับซื้อ ram',
       requestedLocation: requirement.requestedLocation,
       providerLocationUsed: 'Ubon',
-      locationPrecision: 'CITY',
       device: 'MOBILE',
       capturedAt: new Date().toISOString(),
       organicResults: [],
@@ -1704,6 +1817,109 @@ describe('transactional free quota and evidence integration', () => {
         ])
       ).rows[0].source_type,
     ).toBe('OWNER_CONFIRMED_SERP_API_CAPTURE');
+  });
+
+  it('keeps a partial normal-query capture pending and compatible when owner rank is beyond observed depth', async () => {
+    await database.pool.query(`UPDATE opportunities SET query='รับซื้อ ram' WHERE id=$1`, [
+      opportunityId,
+    ]);
+    await storeOwnerEvidence(
+      {
+        requestId,
+        sourceType: 'OWNER_OBSERVED_SERP',
+        evidence: {
+          query: 'รับซื้อ ram',
+          location: 'Ubon',
+          device: 'Desktop',
+          displayedTitle: 'Owner',
+          displayedSnippet: 'Owner',
+          rankingUrl: 'https://amphon.co.th/บริการ/รับซื้อแรม',
+          approximatePosition: 24,
+          serpFeatures: [],
+        },
+        observedAt: new Date(),
+        observedTimezone: 'Asia/Bangkok',
+      },
+      database.pool,
+    );
+    const before = await deterministicEvidencePacket(opportunityId, database.pool);
+    await configureSerpProvider(
+      {
+        provider: 'SERPAPI',
+        enabled: true,
+        configuredAllowance: 1,
+        periodStart: new Date('2026-08-01T00:00:00Z'),
+        periodEnd: new Date('2026-09-01T00:00:00Z'),
+      },
+      database.pool,
+    );
+    const queued = await enqueueSerpApiCapture(
+      {
+        opportunityId,
+        requestId,
+        locationProfileId,
+        device: 'DESKTOP',
+        reviewPolicy: 'OWNER_REVIEW_REQUIRED',
+      },
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    await reserveSerpProviderAttempt(
+      queued.capture!.id,
+      { SERPAPI: true, SERPSTACK: false, SERPER: false },
+      database.pool,
+    );
+    const partial = {
+      ...normalizedFixture(),
+      query: 'รับซื้อ ram',
+      device: 'DESKTOP' as const,
+      organicResults: Array.from({ length: 8 }, (_, index) => ({
+        position: index + 1,
+        title: `Other ${index + 1}`,
+        snippet: null,
+        url: `https://other${index + 1}.example/`,
+        displayedUrl: null,
+      })),
+      requestedOrganicLimit: 20,
+      actualOrganicCount: 8,
+      maximumObservedOrganicPosition: 8,
+      coverageStatus: 'PARTIAL' as const,
+      targetFound: false,
+      targetStatus: 'TARGET_NOT_FOUND_IN_RETURNED_RESULTS' as const,
+      rankLowerBoundExclusive: 8,
+      exactRankKnown: false,
+      targetOrganicPosition: null,
+      targetUrl: null,
+      targetTitle: null,
+      targetSnippet: null,
+    } satisfies NormalizedSerpResult;
+    expect(await persistSerpApiSuccess(queued.capture!.id, partial, database.pool)).toEqual({
+      accepted: false,
+      pendingReview: true,
+      conflict: false,
+    });
+    expect(
+      (
+        await database.pool.query(
+          `SELECT status,coverage_status,target_status,rank_lower_bound_exclusive,conflict,
+           owner_comparison,verified_precision,provider_reported_precision,effective_evidence_context
+           FROM serp_api_captures WHERE id=$1`,
+          [queued.capture!.id],
+        )
+      ).rows[0],
+    ).toMatchObject({
+      status: 'PENDING_REVIEW',
+      coverage_status: 'PARTIAL',
+      target_status: 'TARGET_NOT_FOUND_IN_RETURNED_RESULTS',
+      rank_lower_bound_exclusive: 8,
+      conflict: false,
+      owner_comparison: 'COMPATIBLE_WITH_OWNER_OBSERVATION',
+      verified_precision: 'CITY',
+      provider_reported_precision: 'UNKNOWN',
+      effective_evidence_context: 'VERIFIED_CITY_REQUEST',
+    });
+    expect(await deterministicEvidencePacket(opportunityId, database.pool)).toEqual(before);
+    expect((await database.pool.query(`SELECT count(*)::int n FROM ai_usage`)).rows[0].n).toBe(0);
   });
 
   it('preserves conflicting owner evidence alongside API evidence', async () => {
@@ -1757,12 +1973,12 @@ describe('transactional free quota and evidence integration', () => {
       database.pool,
     );
     const api = {
+      ...normalizedFixture(),
       provider: 'SERPAPI',
       providerRequestId: null,
       query: requirement.query,
       requestedLocation: requirement.requestedLocation,
       providerLocationUsed: 'Ubon',
-      locationPrecision: 'CITY',
       device: 'MOBILE',
       capturedAt: new Date().toISOString(),
       organicResults: [],
@@ -1774,6 +1990,12 @@ describe('transactional free quota and evidence integration', () => {
         shopping: 'UNKNOWN',
       },
       targetFound: false,
+      targetStatus: 'TARGET_NOT_FOUND_IN_RETURNED_RESULTS',
+      rankLowerBoundExclusive: 8,
+      exactRankKnown: false,
+      actualOrganicCount: 8,
+      maximumObservedOrganicPosition: 8,
+      coverageStatus: 'PARTIAL',
       targetOrganicPosition: null,
       targetUrl: null,
       targetTitle: null,
@@ -1802,7 +2024,7 @@ describe('transactional free quota and evidence integration', () => {
       conflict_detail: {
         type: 'SERP_OBSERVATION_CONFLICT',
         ownerPositions: [5],
-        providerTargetState: 'TARGET_NOT_FOUND_TOP_20',
+        providerTargetState: 'TARGET_NOT_FOUND_IN_RETURNED_RESULTS_OBSERVED_MAX_8',
       },
     });
     expect(pending.normalized_result.features).toEqual(api.features);

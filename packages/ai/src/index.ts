@@ -9,6 +9,12 @@ export const DEFAULT_AI_MODEL = 'gpt-5.6-terra';
 export const DEFAULT_AI_REASONING_EFFORT = 'medium';
 export const MAX_AI_CONTEXT_CHARS = 24_000;
 export const MAX_AI_OUTPUT_TOKENS = 2_200;
+export const OPENAI_MAX_RETRIES = 0 as const;
+
+export function createGovernedOpenAiClient(apiKey: string) {
+  if (!apiKey) throw aiError('AI_AUTH_ERROR', 'OPENAI_API_KEY is not configured');
+  return new OpenAI({ apiKey, maxRetries: OPENAI_MAX_RETRIES });
+}
 
 export const recommendationActionTypes = [
   'REVIEW_SEARCH_INTENT',
@@ -245,8 +251,7 @@ export function buildProviderInput(context: RecommendationContext) {
 export class OpenAiResponsesProvider implements ReasoningProvider {
   private readonly client: OpenAI;
   constructor(apiKey: string) {
-    if (!apiKey) throw aiError('AI_AUTH_ERROR', 'OPENAI_API_KEY is not configured');
-    this.client = new OpenAI({ apiKey, maxRetries: 0 });
+    this.client = createGovernedOpenAiClient(apiKey);
   }
   async analyze(context: RecommendationContext, config: AiModelConfig, signal: AbortSignal) {
     const started = performance.now();

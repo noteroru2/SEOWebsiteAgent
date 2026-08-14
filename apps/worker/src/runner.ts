@@ -665,33 +665,16 @@ export async function executeOne(
         const provider =
           aiProviderOverride ?? new OpenAiResponsesProvider(process.env.OPENAI_API_KEY ?? '');
         let analysis;
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try {
-            analysis = await provider.analyze(
-              prepared.context,
-              config,
-              AbortSignal.timeout(Number(process.env.AI_REQUEST_TIMEOUT_MS ?? 60_000)),
-            );
-            break;
-          } catch (error) {
-            await recordAiFailedRequest(prepared.run, pool);
-            if (!(error as { transient?: boolean }).transient || attempt === 1) throw error;
-            await recordJobEvent(
-              id,
-              'AI_ANALYSIS_RETRY',
-              {
-                analysisRunId,
-                attempt: attempt + 1,
-                code: String((error as { code?: string }).code ?? 'AI_PROVIDER_ERROR'),
-              },
-              database,
-            );
-          }
+        try {
+          analysis = await provider.analyze(
+            prepared.context,
+            config,
+            AbortSignal.timeout(Number(process.env.AI_REQUEST_TIMEOUT_MS ?? 60_000)),
+          );
+        } catch (error) {
+          await recordAiFailedRequest(prepared.run, pool);
+          throw error;
         }
-        if (!analysis)
-          throw Object.assign(new Error('AI provider returned no analysis'), {
-            code: 'AI_INCOMPLETE_RESPONSE',
-          });
         if (await jobCancellationRequested(id, database))
           throw Object.assign(new Error('Cancelled before recommendation persistence'), {
             code: 'AI_CANCELLED',

@@ -4,8 +4,8 @@ import { lstat, readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { z } from 'zod';
-import OpenAI from 'openai';
 import { zodTextFormat } from 'openai/helpers/zod';
+import { createGovernedOpenAiClient } from '@seo-agent/ai';
 
 const execFileAsync = promisify(execFile);
 export const SOURCE_PLAN_PROMPT_VERSION = 'source-change-plan-prompt-v2';
@@ -931,9 +931,9 @@ export interface SourcePlanProvider {
   generate(input: SourcePlanProviderInput, signal: AbortSignal): Promise<SourcePlanProviderResult>;
 }
 export class OpenAiSourcePlanProvider implements SourcePlanProvider {
-  readonly #client: OpenAI;
+  readonly #client: ReturnType<typeof createGovernedOpenAiClient>;
   constructor(apiKey: string) {
-    this.#client = new OpenAI({ apiKey });
+    this.#client = createGovernedOpenAiClient(apiKey);
   }
   async generate(input: SourcePlanProviderInput, signal: AbortSignal) {
     const started = performance.now();

@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, lt, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, lt, notInArray, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool, type PoolClient } from 'pg';
 import { createSiteSchema, enqueueJobSchema, type JobType } from '@seo-agent/shared';
@@ -38,6 +38,7 @@ export async function createSite(input: unknown, database = getDatabase().db) {
 
 export async function enqueueJob(input: unknown, database = getDatabase().db) {
   const value = enqueueJobSchema.parse(input);
+  const governedAiTypes: JobType[] = ['ANALYZE_OPPORTUNITY', 'GENERATE_SOURCE_CHANGE_PLAN'];
   const deduplicatedTypes = [
     'GSC_SYNC',
     'GENERATE_OPPORTUNITIES',
@@ -49,6 +50,7 @@ export async function enqueueJob(input: unknown, database = getDatabase().db) {
     type: value.type,
     siteId: value.siteId,
     heavy: !deduplicatedTypes.includes(value.type),
+    ...(governedAiTypes.includes(value.type) ? { maxAttempts: 1 } : {}),
     payload: ['CAPTURE_SERP', 'FETCH_SERP_API'].includes(value.type)
       ? {
           opportunityId: value.opportunityId,
@@ -417,6 +419,29 @@ export async function markJobFailed(
 
 export async function recoverStaleJobs(staleMinutes: number, database = getDatabase().db) {
   const cutoff = new Date(Date.now() - staleMinutes * 60_000);
+  const governedAiTypes: JobType[] = ['ANALYZE_OPPORTUNITY', 'GENERATE_SOURCE_CHANGE_PLAN'];
+  const terminal = await database
+    .update(schema.jobs)
+    .set({
+      status: 'FAILED',
+      failureCode: 'WORKER_LOST',
+      failureSummary:
+        'AI execution stopped after worker heartbeat became stale; owner authorization is required for a new execution',
+      finishedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(schema.jobs.status, 'RUNNING'),
+        lt(schema.jobs.heartbeatAt, cutoff),
+        inArray(schema.jobs.type, governedAiTypes),
+      ),
+    )
+    .returning();
+  for (const job of terminal)
+    await database
+      .insert(schema.jobEvents)
+      .values({ jobId: job.id, event: 'FAILED', detail: { code: 'WORKER_LOST' } });
   const recovered = await database
     .update(schema.jobs)
     .set({
@@ -432,6 +457,7 @@ export async function recoverStaleJobs(staleMinutes: number, database = getDatab
       and(
         eq(schema.jobs.status, 'RUNNING'),
         lt(schema.jobs.heartbeatAt, cutoff),
+        notInArray(schema.jobs.type, governedAiTypes),
         sql`${schema.jobs.attemptCount} < ${schema.jobs.maxAttempts}`,
       ),
     )

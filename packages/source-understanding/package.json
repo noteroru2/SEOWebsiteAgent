@@ -5,6 +5,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@seo-agent/ai": "0.1.0",
     "openai": "^7.4.0",
     "zod": "latest"
   }

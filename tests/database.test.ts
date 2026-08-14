@@ -118,6 +118,60 @@ suite('database, migrations, and queue', () => {
     expect(recovered[0]!.status).toBe('QUEUED');
     expect(recovered[0]!.attemptCount).toBe(1);
   });
+  it('makes governed AI jobs single-attempt and terminal after a lost worker', async () => {
+    const site = await createSite(
+      { name: 'AI No Retry', url: 'https://ai-no-retry.example.com' },
+      database.db,
+    );
+    const opportunity = (
+      await database.pool.query(
+        `INSERT INTO opportunities(site_id,kind,title,summary,fingerprint,engine_version)
+         VALUES($1,'LOW_CTR_QUERY','One call','One call','ai-no-retry','opportunity-engine-v1') RETURNING id`,
+        [site.id],
+      )
+    ).rows[0];
+    const job = await enqueueJob(
+      { type: 'ANALYZE_OPPORTUNITY', siteId: site.id, opportunityId: opportunity.id },
+      database.db,
+    );
+    expect(job.maxAttempts).toBe(1);
+    await claimNextJob('lost-ai-worker', database.pool);
+    await database.pool.query("UPDATE jobs SET heartbeat_at=now()-interval '1 hour' WHERE id=$1", [
+      job.id,
+    ]);
+    expect(await recoverStaleJobs(15, database.db)).toHaveLength(0);
+    const terminal = (
+      await database.pool.query(
+        `SELECT status,attempt_count,max_attempts,failure_code FROM jobs WHERE id=$1`,
+        [job.id],
+      )
+    ).rows[0];
+    expect(terminal).toMatchObject({
+      status: 'FAILED',
+      attempt_count: 1,
+      max_attempts: 1,
+      failure_code: 'WORKER_LOST',
+    });
+    expect(await claimNextJob('second-ai-worker', database.pool)).toBeUndefined();
+    await expect(
+      retryFailedJob(
+        job.id,
+        { expectedType: 'ANALYZE_OPPORTUNITY', expectedFailureCode: 'WORKER_LOST' },
+        database.pool,
+      ),
+    ).rejects.toThrow('no attempts remaining');
+    const sourcePlanJob = await enqueueJob(
+      {
+        type: 'GENERATE_SOURCE_CHANGE_PLAN',
+        siteId: site.id,
+        opportunityId: opportunity.id,
+        evidenceReevaluation: true,
+        evidencePacketHash: 'a'.repeat(64),
+      },
+      database.db,
+    );
+    expect(sourcePlanJob.maxAttempts).toBe(1);
+  });
   it('retries the same failed job while preserving the failed-attempt audit', async () => {
     const job = await enqueueJob({ type: 'SYSTEM_TEST' }, database.db);
     await claimNextJob('failed-worker', database.pool);

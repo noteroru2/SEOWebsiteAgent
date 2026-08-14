@@ -240,9 +240,9 @@ describe('AI recommendation worker pipeline', () => {
   });
 
   for (const [mode, code, calls] of [
-    ['timeout', 'AI_TIMEOUT', 2],
-    ['429', 'AI_RATE_LIMITED', 2],
-    ['5xx', 'AI_PROVIDER_ERROR', 2],
+    ['timeout', 'AI_TIMEOUT', 1],
+    ['429', 'AI_RATE_LIMITED', 1],
+    ['5xx', 'AI_PROVIDER_ERROR', 1],
     ['auth', 'AI_AUTH_ERROR', 1],
     ['malformed', 'AI_SCHEMA_INVALID', 1],
   ] as Array<[FakeAiMode, string, number]>) {

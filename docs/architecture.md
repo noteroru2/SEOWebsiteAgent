@@ -8,6 +8,8 @@ Batch 6.4 adds scoped evidence requests/items, equal-window GSC comparison, exac
 
 Owner-Priority Research V1 adds an owner-controlled research subject that is deliberately separate from deterministic Opportunities. It references stored GSC rows, validated source mappings, and canonical Owner Facts, then persists deterministic readiness and findings without creating jobs or invoking providers. Evidence requests can belong to exactly one Opportunity or Owner Research case. See [owner-priority research](owner-priority-research.md).
 
+Owner-Priority V3 extends the existing governed source-plan pipeline with an exactly-one-subject identity. Research cases use one-time owner authorization, a dedicated versioned prompt, deterministic context hashing, and the same single-attempt OpenAI transport and budget guards; no synthetic Opportunity or automatic Batch 7 action is introduced.
+
 Automated database tests use a separately created and migrated `seo_agent_test` database in the
 same PostgreSQL instance. Destructive test reset is fail-closed behind explicit environment,
 database-name, live-connection, and marker checks; it cannot fall back to the development database.

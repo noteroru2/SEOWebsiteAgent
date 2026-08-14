@@ -32,6 +32,8 @@ import {
   sourceRepositoryForSite,
   persistSourceRefresh,
   opportunitySourceInput,
+  ownerResearchSourceInput,
+  consumeOwnerResearchAiAuthorization,
   createSourcePlanRun,
   persistSourcePlanSuccess,
   failSourcePlanRun,
@@ -61,6 +63,7 @@ import { aiConfigFromEnv, OpenAiResponsesProvider, type ReasoningProvider } from
 import {
   OpenAiSourcePlanProvider,
   SOURCE_PLAN_EVIDENCE_PROMPT_VERSION,
+  SOURCE_PLAN_OWNER_RESEARCH_PROMPT_VERSION,
   SOURCE_PLAN_PROMPT_VERSION,
   buildSourceContext,
   boundSourceExcerpt,
@@ -319,19 +322,30 @@ export async function executeOne(
     if (type === 'GENERATE_SOURCE_CHANGE_PLAN') {
       const payload = (job.payload ?? {}) as {
         opportunityId?: string;
+        ownerResearchCaseId?: string;
+        ownerAuthorizationId?: string;
         evidenceReevaluation?: boolean;
         evidencePacketHash?: string;
       };
-      if (!payload.opportunityId)
-        throw Object.assign(new Error('Opportunity id is required'), {
-          code: 'OPPORTUNITY_REQUIRED',
+      const subjectCount =
+        Number(Boolean(payload.opportunityId)) + Number(Boolean(payload.ownerResearchCaseId));
+      if (subjectCount !== 1)
+        throw Object.assign(new Error('Exactly one analysis subject is required'), {
+          code: 'ANALYSIS_SUBJECT_REQUIRED',
+        });
+      if (payload.ownerResearchCaseId && !payload.ownerAuthorizationId)
+        throw Object.assign(new Error('One-time owner authorization is required'), {
+          code: 'OWNER_AUTHORIZATION_REQUIRED',
         });
       let runId: string | undefined;
       try {
-        const source = await opportunitySourceInput(payload.opportunityId, pool);
-        const evidence = payload.evidenceReevaluation
-          ? await deterministicEvidencePacket(payload.opportunityId, pool)
-          : null;
+        const source = payload.ownerResearchCaseId
+          ? await ownerResearchSourceInput(payload.ownerResearchCaseId, pool)
+          : await opportunitySourceInput(payload.opportunityId!, pool);
+        const evidence =
+          payload.evidenceReevaluation && payload.opportunityId
+            ? await deterministicEvidencePacket(payload.opportunityId, pool)
+            : null;
         if (
           evidence &&
           payload.evidencePacketHash &&
@@ -421,6 +435,16 @@ export async function executeOne(
         );
         runId = String(prepared.run.id);
         if (prepared.reused) {
+          if (payload.ownerResearchCaseId)
+            await consumeOwnerResearchAiAuthorization(
+              {
+                authorizationId: payload.ownerAuthorizationId!,
+                caseId: payload.ownerResearchCaseId,
+                jobId: id,
+                runId,
+              },
+              pool,
+            );
           const result = {
             sourcePlanRunId: runId,
             reusedRunId: prepared.run.reused_run_id,
@@ -429,29 +453,51 @@ export async function executeOne(
           await recordJobEvent(id, 'SOURCE_PLAN_REUSED', result, database);
           return { state: 'SUCCEEDED' as const, job: await markJobSucceeded(id, result, pool) };
         }
+        if (payload.ownerResearchCaseId)
+          await consumeOwnerResearchAiAuthorization(
+            {
+              authorizationId: payload.ownerAuthorizationId!,
+              caseId: payload.ownerResearchCaseId,
+              jobId: id,
+              runId,
+            },
+            pool,
+          );
         await recordJobEvent(
           id,
           'SOURCE_PLAN_STARTED',
           {
             sourcePlanRunId: runId,
             opportunityId: payload.opportunityId,
+            ownerResearchCaseId: payload.ownerResearchCaseId,
             model: 'gpt-5.6-terra',
-            promptVersion: evidence
-              ? SOURCE_PLAN_EVIDENCE_PROMPT_VERSION
-              : SOURCE_PLAN_PROMPT_VERSION,
+            promptVersion: payload.ownerResearchCaseId
+              ? SOURCE_PLAN_OWNER_RESEARCH_PROMPT_VERSION
+              : evidence
+                ? SOURCE_PLAN_EVIDENCE_PROMPT_VERSION
+                : SOURCE_PLAN_PROMPT_VERSION,
           },
           database,
         );
         const provider =
           sourcePlanProviderOverride ??
           new OpenAiSourcePlanProvider(process.env.OPENAI_API_KEY ?? '');
+        const providerInput =
+          source.subjectType === 'OWNER_RESEARCH_CASE'
+            ? {
+                subjectType: 'OWNER_RESEARCH_CASE' as const,
+                ownerResearch: source.researchContext,
+                context,
+              }
+            : {
+                subjectType: 'OPPORTUNITY' as const,
+                opportunity: source.opportunity,
+                batch5: source.batch5,
+                context,
+                evidencePacket: evidence?.packet,
+              };
         const analysis = await provider.generate(
-          {
-            opportunity: source.opportunity,
-            batch5: source.batch5,
-            context,
-            evidencePacket: evidence?.packet,
-          },
+          providerInput,
           AbortSignal.timeout(Number(process.env.AI_REQUEST_TIMEOUT_MS ?? 60_000)),
         );
         const persisted = await persistSourcePlanSuccess(prepared.run, analysis, pool);
@@ -477,6 +523,7 @@ export async function executeOne(
           {
             sourcePlanRunId: runId,
             opportunityId: payload.opportunityId,
+            ownerResearchCaseId: payload.ownerResearchCaseId,
             code,
             summary: summary.slice(0, 200),
           },

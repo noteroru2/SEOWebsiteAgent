@@ -11,13 +11,20 @@ import {
   createDatabase,
   createOwnerResearchCase,
   createSite,
+  buildOwnerResearchV3Context,
   diagnoseSerpQuota,
   ensureEvidenceRequest,
   ensureResearchEvidenceRequest,
   getOwnerResearchCase,
   normalizeOwnerResearchQuery,
   reassessOwnerResearchCase,
+  recordOwnerResearchAiAuthorization,
+  enqueueJob,
+  sourcePanelForOwnerResearch,
 } from '@seo-agent/database';
+import { ResourceGuard } from '@seo-agent/resource-guard';
+import type { SourcePlanProvider } from '@seo-agent/source-understanding';
+import { executeOne } from '../apps/worker/src/runner';
 import { requireTestDatabaseUrl, resetTestDatabase } from '../packages/database/src/test-safety';
 
 const execFileAsync = promisify(execFile);
@@ -29,6 +36,56 @@ let siteId = '';
 let parent = '';
 let repository = '';
 let repositoryHead = '';
+const guard = new ResourceGuard(
+  {},
+  {
+    collect: async () => ({
+      freeMemoryMb: 2000,
+      freeDiskMb: 10_000,
+      loadPerCpu: 0,
+      platform: 'linux',
+    }),
+  },
+);
+
+class OwnerResearchProvider implements SourcePlanProvider {
+  calls = 0;
+  lastInput: Parameters<SourcePlanProvider['generate']>[0] | null = null;
+  async generate(input: Parameters<SourcePlanProvider['generate']>[0]) {
+    this.calls++;
+    this.lastInput = input;
+    const file = input.context.files[0]!;
+    return {
+      result: {
+        verdict: 'NEEDS_MORE_EVIDENCE' as const,
+        confidence: 'MEDIUM' as const,
+        batch5_reconciliation: 'NOT_NEEDED' as const,
+        summary:
+          'à¸„à¸§à¸£à¸¢à¸·à¸™à¸¢à¸±à¸™à¸šà¸—à¸šà¸²à¸—à¸«à¸™à¹‰à¸²à¸ˆà¸²à¸à¸«à¸¥à¸±à¸à¸à¸²à¸™à¹€à¸žà¸´à¹ˆà¸¡à¹€à¸•à¸´à¸¡à¸à¹ˆà¸­à¸™à¹à¸à¹‰à¹„à¸‚',
+        source_findings: [],
+        change_items: [],
+        preserve: [
+          {
+            path: file.path,
+            section: 'à¹€à¸™à¸·à¹‰à¸­à¸«à¸²à¸›à¸±à¸ˆà¸ˆà¸¸à¸šà¸±à¸™',
+            reason: 'à¸¢à¸±à¸‡à¹„à¸¡à¹ˆà¸¡à¸µà¸«à¸¥à¸±à¸à¸à¸²à¸™à¸§à¹ˆà¸²à¹€à¸ªà¸µà¸¢à¸«à¸²à¸¢',
+          },
+        ],
+        additional_evidence_needed: [
+          'à¸•à¸£à¸§à¸ˆà¸ªà¸­à¸šà¸šà¸—à¸šà¸²à¸—à¸«à¸™à¹‰à¸²à¸”à¹‰à¸§à¸¢à¸«à¸¥à¸±à¸à¸à¸²à¸™à¸—à¸µà¹ˆà¸ˆà¸³à¸à¸±à¸”',
+        ],
+        unknowns: [
+          'à¸œà¸¥à¸à¸£à¸°à¸—à¸šà¸‚à¸­à¸‡à¸à¸²à¸£à¹à¸¢à¹ˆà¸‡à¸„à¸µà¸¢à¹Œà¹€à¸§à¸´à¸£à¹Œà¸”à¸¢à¸±à¸‡à¹„à¸¡à¹ˆà¸–à¸¹à¸à¸¢à¸·à¸™à¸¢à¸±à¸™',
+        ],
+      },
+      providerRequestId: 'owner-research-provider-1',
+      inputTokens: 1000,
+      cachedInputTokens: 100,
+      outputTokens: 200,
+      latencyMs: 10,
+    };
+  }
+}
 
 const caseInput = () => ({
   siteId,
@@ -128,6 +185,16 @@ async function seedResearchContext() {
   );
 }
 
+async function readyResearchCase() {
+  await seedResearchContext();
+  await registerCompanyFacts();
+  const created = await createOwnerResearchCase(caseInput(), database.pool);
+  await reassessOwnerResearchCase(created.researchCase.id, database.pool, {
+    sourceAllowedRoots: [parent],
+  });
+  return created.researchCase.id as string;
+}
+
 describe('owner-priority research workflow', () => {
   beforeAll(async () => {
     await migrate(database.db, { migrationsFolder: 'packages/database/migrations' });
@@ -152,6 +219,7 @@ describe('owner-priority research workflow', () => {
     repositoryHead = await git(['rev-parse', 'HEAD']);
   });
   beforeEach(async () => {
+    process.env.SOURCE_REPO_ALLOWED_ROOTS = parent;
     await resetTestDatabase(database.pool);
     siteId = (
       await createSite(
@@ -349,6 +417,132 @@ describe('owner-priority research workflow', () => {
     expect(assessment.status).toBe('WAITING_FOR_EVIDENCE');
     expect(assessment.blockers).toContain('STORED_GSC_REQUIRED');
     expect(assessment.blockers).toContain('CLEAN_MAPPED_SOURCE_REQUIRED');
+  });
+
+  it('builds a bounded provenance-safe owner V3 context without SERP fabrication', async () => {
+    const caseId = await readyResearchCase();
+    const built = await buildOwnerResearchV3Context(caseId, database.pool);
+    expect(built.packet.subject).toMatchObject({ type: 'OWNER_RESEARCH_CASE', id: caseId, query });
+    expect(built.packet.gsc.metrics).toEqual({ clicks: 0, impressions: 15, ctr: 0, position: 5.6 });
+    expect(built.packet.gsc.queryPageDistribution.map((item) => item.impressions)).toEqual([14, 1]);
+    expect(built.packet.gsc.queryOwnershipInterpretation).toContain('UNPROVEN');
+    expect(built.packet.ownerFacts).toHaveLength(13);
+    expect(new Set(built.packet.ownerFacts.map((fact) => fact.provenance))).toEqual(
+      new Set(['OWNER_CONFIRMED_DIRECT']),
+    );
+    expect(built.packet.evidence.serp).toBe('NONE');
+    const serialized = JSON.stringify(built.packet).toLowerCase();
+    expect(serialized).not.toContain('owner_observed_serp');
+    expect(built.packet.excludedUnconfirmedClaims).toContain('VAT registration');
+    expect(built.contextHash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('requires exactly one subject and a fresh one-time owner authorization', async () => {
+    const caseId = await readyResearchCase();
+    await expect(
+      enqueueJob(
+        { type: 'GENERATE_SOURCE_CHANGE_PLAN', siteId, ownerResearchCaseId: caseId },
+        database.db,
+      ),
+    ).rejects.toThrow('one-time owner authorization');
+    await expect(
+      enqueueJob(
+        {
+          type: 'GENERATE_SOURCE_CHANGE_PLAN',
+          siteId,
+          opportunityId: crypto.randomUUID(),
+          ownerResearchCaseId: caseId,
+          ownerAuthorizationId: crypto.randomUUID(),
+        },
+        database.db,
+      ),
+    ).rejects.toThrow('exactly one analysis subject');
+    expect((await database.pool.query('SELECT count(*)::int n FROM jobs')).rows[0].n).toBe(0);
+  });
+
+  it('runs Owner Research V3 once, consumes authorization, and preserves Opportunity absence', async () => {
+    const caseId = await readyResearchCase();
+    const authorization = await recordOwnerResearchAiAuthorization(
+      {
+        caseId,
+        authorizationRef: `test-owner-v3-${crypto.randomUUID()}`,
+        authorizedBy: 'LOCAL_OWNER',
+        ownerAuthorized: true,
+      },
+      database.pool,
+    );
+    await enqueueJob(
+      {
+        type: 'GENERATE_SOURCE_CHANGE_PLAN',
+        siteId,
+        ownerResearchCaseId: caseId,
+        ownerAuthorizationId: authorization.id,
+      },
+      database.db,
+    );
+    const provider = new OwnerResearchProvider();
+    expect(
+      (
+        await executeOne(
+          'owner-v3-test-worker',
+          database.pool,
+          guard,
+          undefined,
+          undefined,
+          provider,
+        )
+      ).state,
+    ).toBe('SUCCEEDED');
+    expect(provider.calls).toBe(1);
+    expect(provider.lastInput?.subjectType).toBe('OWNER_RESEARCH_CASE');
+    const panel = await sourcePanelForOwnerResearch(caseId, database.pool);
+    expect(panel.latest).toMatchObject({
+      opportunity_id: null,
+      owner_research_case_id: caseId,
+      subject_type: 'OWNER_RESEARCH_CASE',
+      verdict: 'NEEDS_MORE_EVIDENCE',
+    });
+    const auth = (
+      await database.pool.query('SELECT * FROM owner_research_ai_authorizations WHERE id=$1', [
+        authorization.id,
+      ])
+    ).rows[0];
+    expect(auth).toMatchObject({ status: 'CONSUMED', case_id: caseId });
+    expect(
+      (await database.pool.query('SELECT status FROM owner_research_cases WHERE id=$1', [caseId]))
+        .rows[0].status,
+    ).toBe('ANALYSIS_COMPLETE');
+    expect(
+      (
+        await database.pool.query('SELECT * FROM ai_usage WHERE owner_research_case_id=$1', [
+          caseId,
+        ])
+      ).rows,
+    ).toHaveLength(1);
+    await expect(
+      enqueueJob(
+        {
+          type: 'GENERATE_SOURCE_CHANGE_PLAN',
+          siteId,
+          ownerResearchCaseId: caseId,
+          ownerAuthorizationId: authorization.id,
+        },
+        database.db,
+      ),
+    ).resolves.toBeTruthy();
+    expect(
+      (
+        await executeOne(
+          'owner-v3-test-worker',
+          database.pool,
+          guard,
+          undefined,
+          undefined,
+          provider,
+        )
+      ).state,
+    ).toBe('FAILED');
+    expect(provider.calls).toBe(1);
   });
 
   it('diagnoses only local SERP allowance metadata without attempting a provider call', async () => {

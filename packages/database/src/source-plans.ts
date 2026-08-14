@@ -3,14 +3,17 @@ import { calculateCostMicros } from '@seo-agent/ai';
 import {
   SOURCE_PLAN_PROMPT_VERSION,
   SOURCE_PLAN_EVIDENCE_PROMPT_VERSION,
+  SOURCE_PLAN_OWNER_RESEARCH_PROMPT_VERSION,
   SOURCE_PLAN_SCHEMA_VERSION,
   sourceEvidenceHash,
+  ownerResearchSourceEvidenceHash,
   type RepositoryState,
   type RouteMapping,
   type SourceContext,
   type SourcePlanProviderResult,
 } from '@seo-agent/source-understanding';
 import { getDatabase } from './index';
+import { buildOwnerResearchV3Context } from './owner-research';
 
 function dollarsMicros(value: string | undefined, fallback: number) {
   const parsed = Number(value ?? fallback);
@@ -188,37 +191,118 @@ export async function opportunitySourceInput(
     `SELECT * FROM source_route_mappings WHERE repository_id=$1 AND (route_path=ANY($2::text[]) OR trim(trailing '/' from route_path)=ANY($3::text[])) ORDER BY route_path`,
     [repository.id, routes, routes.map((x) => x.replace(/\/$/, '') || '/')],
   );
-  return { opportunity, batch5: ai.rows[0], repository, routes, mappings: mappings.rows };
+  return {
+    subjectType: 'OPPORTUNITY' as const,
+    siteId: String(opportunity.site_id),
+    opportunity,
+    batch5: ai.rows[0],
+    repository,
+    routes,
+    mappings: mappings.rows,
+  };
 }
+
+export async function ownerResearchSourceInput(
+  ownerResearchCaseId: string,
+  pool: Pool = getDatabase().pool,
+) {
+  const { packet, contextHash } = await buildOwnerResearchV3Context(ownerResearchCaseId, pool);
+  const subject = packet.subject;
+  const selected = (
+    await pool.query(
+      `SELECT c.*,s.url site_url,s.name site_name,r.id repository_record_id,
+        r.local_path repository_local_path,r.head_sha repository_head_sha,
+        r.worktree_clean repository_worktree_clean,r.enabled repository_enabled
+       FROM owner_research_cases c
+       JOIN sites s ON s.id=c.site_id JOIN site_repositories r ON r.id=c.repository_id
+       WHERE c.id=$1 AND r.enabled=true`,
+      [ownerResearchCaseId],
+    )
+  ).rows[0];
+  if (
+    !selected?.repository_head_sha ||
+    selected.repository_worktree_clean !== true ||
+    selected.repository_head_sha !== packet.source.headSha
+  )
+    throw Object.assign(new Error('Validated clean research source repository required'), {
+      code: 'SOURCE_REPOSITORY_REFRESH_REQUIRED',
+    });
+  const mappings = (
+    await pool.query(
+      `SELECT m.* FROM owner_research_source_links l JOIN source_route_mappings m ON m.id=l.mapping_id
+       WHERE l.case_id=$1 ORDER BY l.role,m.route_path`,
+      [ownerResearchCaseId],
+    )
+  ).rows;
+  return {
+    subjectType: 'OWNER_RESEARCH_CASE' as const,
+    siteId: String(selected.site_id),
+    ownerResearchCase: selected,
+    subject,
+    researchContext: packet,
+    contextHash,
+    repository: {
+      id: selected.repository_record_id,
+      local_path: selected.repository_local_path,
+      head_sha: selected.repository_head_sha,
+      worktree_clean: selected.repository_worktree_clean,
+    },
+    routes: mappings.map((mapping) => String(mapping.route_path)),
+    mappings,
+  };
+}
+
+export type SourcePlanAnalysisInput =
+  | Awaited<ReturnType<typeof opportunitySourceInput>>
+  | Awaited<ReturnType<typeof ownerResearchSourceInput>>;
 
 export async function createSourcePlanRun(
   input: {
     jobId: string;
-    source: Awaited<ReturnType<typeof opportunitySourceInput>>;
+    source: SourcePlanAnalysisInput;
     context: SourceContext;
     evidencePacket?: unknown;
   },
   pool: Pool = getDatabase().pool,
 ) {
-  const hash = sourceEvidenceHash({
-    opportunityFingerprint: input.source.opportunity.fingerprint,
-    batch5AnalysisId: input.source.batch5.analysis_id,
-    context: input.context,
-    evidencePacket: input.evidencePacket,
-  });
-  const promptVersion = input.evidencePacket
-    ? SOURCE_PLAN_EVIDENCE_PROMPT_VERSION
-    : SOURCE_PLAN_PROMPT_VERSION;
+  const ownerSource = input.source.subjectType === 'OWNER_RESEARCH_CASE' ? input.source : null;
+  const opportunitySource = input.source.subjectType === 'OPPORTUNITY' ? input.source : null;
+  const ownerResearch = Boolean(ownerSource);
+  const hash = ownerSource
+    ? ownerResearchSourceEvidenceHash({
+        subject: {
+          type: 'OWNER_RESEARCH_CASE',
+          id: String(ownerSource.subject.id),
+          normalizedQuery: String(ownerSource.subject.normalizedQuery),
+        },
+        context: input.context,
+        researchContext: ownerSource.researchContext,
+      })
+    : sourceEvidenceHash({
+        opportunityFingerprint: opportunitySource!.opportunity.fingerprint,
+        batch5AnalysisId: opportunitySource!.batch5.analysis_id,
+        context: input.context,
+        evidencePacket: input.evidencePacket,
+      });
+  const promptVersion = ownerResearch
+    ? SOURCE_PLAN_OWNER_RESEARCH_PROMPT_VERSION
+    : input.evidencePacket
+      ? SOURCE_PLAN_EVIDENCE_PROMPT_VERSION
+      : SOURCE_PLAN_PROMPT_VERSION;
+  const opportunityId = opportunitySource?.opportunity.id ?? null;
+  const ownerResearchCaseId = ownerSource?.ownerResearchCase.id ?? null;
   const reuse = await pool.query(
     `SELECT r.id run_id,p.* FROM source_plan_runs r JOIN source_change_plans p ON p.run_id=r.id WHERE r.source_evidence_hash=$1 AND r.status='SUCCEEDED' ORDER BY r.created_at DESC LIMIT 1`,
     [hash],
   );
   if (reuse.rows[0]) {
     const run = await pool.query(
-      `INSERT INTO source_plan_runs(site_id,opportunity_id,repository_id,job_id,reused_run_id,status,model,reasoning_effort,prompt_version,schema_version,repository_head_sha,source_evidence_hash,source_context,finished_at) VALUES($1,$2,$3,$4,$5,'REUSED','gpt-5.6-terra','medium',$6,$7,$8,$9,$10::jsonb,now()) RETURNING *`,
+      `INSERT INTO source_plan_runs(site_id,opportunity_id,owner_research_case_id,subject_type,repository_id,job_id,reused_run_id,status,model,reasoning_effort,prompt_version,schema_version,repository_head_sha,source_evidence_hash,source_context,finished_at) VALUES($1,$2,$3,$4,$5,$6,$7,'REUSED','gpt-5.6-terra','medium',$8,$9,$10,$11,$12::jsonb,now()) RETURNING *`,
       [
-        input.source.opportunity.site_id,
-        input.source.opportunity.id,
+        input.source.siteId,
+        opportunityId,
+        ownerResearchCaseId,
+        input.source.subjectType,
         input.source.repository.id,
         input.jobId,
         reuse.rows[0].run_id,
@@ -233,7 +317,7 @@ export async function createSourcePlanRun(
   }
   const month = await pool.query(
     `SELECT COALESCE(sum(cost_micros),0)::bigint global_cost,COALESCE(sum(cost_micros) FILTER(WHERE site_id=$1),0)::bigint site_cost FROM ai_usage WHERE created_at>=date_trunc('month',now())`,
-    [input.source.opportunity.site_id],
+    [input.source.siteId],
   );
   const estimated = dollarsMicros(process.env.AI_SOURCE_PLAN_MAX_COST_USD, 0.5);
   if (
@@ -246,10 +330,12 @@ export async function createSourcePlanRun(
       code: 'AI_BUDGET_EXCEEDED',
     });
   const run = await pool.query(
-    `INSERT INTO source_plan_runs(site_id,opportunity_id,repository_id,job_id,status,model,reasoning_effort,prompt_version,schema_version,repository_head_sha,source_evidence_hash,source_context) VALUES($1,$2,$3,$4,'RUNNING','gpt-5.6-terra','medium',$5,$6,$7,$8,$9::jsonb) RETURNING *`,
+    `INSERT INTO source_plan_runs(site_id,opportunity_id,owner_research_case_id,subject_type,repository_id,job_id,status,model,reasoning_effort,prompt_version,schema_version,repository_head_sha,source_evidence_hash,source_context) VALUES($1,$2,$3,$4,$5,$6,'RUNNING','gpt-5.6-terra','medium',$7,$8,$9,$10,$11::jsonb) RETURNING *`,
     [
-      input.source.opportunity.site_id,
-      input.source.opportunity.id,
+      input.source.siteId,
+      opportunityId,
+      ownerResearchCaseId,
+      input.source.subjectType,
       input.source.repository.id,
       input.jobId,
       promptVersion,
@@ -281,11 +367,13 @@ export async function persistSourcePlanSuccess(
   try {
     await client.query('BEGIN');
     const plan = await client.query(
-      `INSERT INTO source_change_plans(run_id,site_id,opportunity_id,verdict,confidence,batch5_reconciliation,summary,structured_output,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,'READY_FOR_REVIEW') RETURNING *`,
+      `INSERT INTO source_change_plans(run_id,site_id,opportunity_id,owner_research_case_id,subject_type,verdict,confidence,batch5_reconciliation,summary,structured_output,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,'READY_FOR_REVIEW') RETURNING *`,
       [
         run.id,
         run.site_id,
         run.opportunity_id,
+        run.owner_research_case_id,
+        run.subject_type,
         analysis.result.verdict,
         analysis.result.confidence,
         analysis.result.batch5_reconciliation,
@@ -306,11 +394,12 @@ export async function persistSourcePlanSuccess(
       ],
     );
     await client.query(
-      `INSERT INTO ai_usage(site_id,job_id,opportunity_id,source_plan_run_id,provider,model,prompt_version,input_tokens,cached_input_tokens,output_tokens,cost_micros,status) VALUES($1,$2,$3,$4,'openai',$5,$6,$7,$8,$9,$10,'SUCCEEDED')`,
+      `INSERT INTO ai_usage(site_id,job_id,opportunity_id,owner_research_case_id,source_plan_run_id,provider,model,prompt_version,input_tokens,cached_input_tokens,output_tokens,cost_micros,status) VALUES($1,$2,$3,$4,$5,'openai',$6,$7,$8,$9,$10,$11,'SUCCEEDED')`,
       [
         run.site_id,
         run.job_id,
         run.opportunity_id,
+        run.owner_research_case_id,
         run.id,
         run.model,
         run.prompt_version,
@@ -320,6 +409,13 @@ export async function persistSourcePlanSuccess(
         cost,
       ],
     );
+    if (run.owner_research_case_id)
+      await client.query(
+        `UPDATE owner_research_cases SET status='ANALYSIS_COMPLETE',
+         metadata=metadata || jsonb_build_object('latestV3PlanId',$2::text,'latestV3RunId',$3::text),
+         updated_at=now() WHERE id=$1`,
+        [run.owner_research_case_id, plan.rows[0].id, run.id],
+      );
     await client.query(
       `INSERT INTO system_events(source,level,event,detail) VALUES('source','INFO','SOURCE_PLAN_COMPLETED',jsonb_build_object('runId',$1::text,'planId',$2::text,'costMicros',$3::int))`,
       [run.id, plan.rows[0].id, cost],
@@ -397,6 +493,26 @@ export async function sourcePanelForOpportunity(
   };
 }
 
+export async function sourcePanelForOwnerResearch(
+  ownerResearchCaseId: string,
+  pool: Pool = getDatabase().pool,
+) {
+  const [latest, active] = await Promise.all([
+    pool.query(
+      `SELECT p.*,r.repository_head_sha,r.actual_cost_micros,r.source_context FROM source_change_plans p
+       JOIN source_plan_runs r ON r.id=p.run_id WHERE p.owner_research_case_id=$1
+       ORDER BY p.created_at DESC LIMIT 1`,
+      [ownerResearchCaseId],
+    ),
+    pool.query(
+      `SELECT id,status FROM jobs WHERE type='GENERATE_SOURCE_CHANGE_PLAN'
+       AND payload->>'ownerResearchCaseId'=$1 AND status IN ('QUEUED','RUNNING') LIMIT 1`,
+      [ownerResearchCaseId],
+    ),
+  ]);
+  return { latest: latest.rows[0] ?? null, activeJob: active.rows[0] ?? null };
+}
+
 export async function siteSourceSummary(siteId: string, pool: Pool = getDatabase().pool) {
   const result = await pool.query(
     `SELECT r.*,count(m.id)::int routes_mapped,count(m.id) FILTER(WHERE m.mapping_status IN ('UNRESOLVED','AMBIGUOUS'))::int unresolved_routes FROM site_repositories r LEFT JOIN source_route_mappings m ON m.repository_id=r.id WHERE r.site_id=$1 AND r.enabled=true GROUP BY r.id ORDER BY r.updated_at DESC LIMIT 1`,
@@ -408,7 +524,13 @@ export async function siteSourceSummary(siteId: string, pool: Pool = getDatabase
 export async function listSourceApprovals(pool: Pool = getDatabase().pool) {
   const started = performance.now();
   const result = await pool.query(
-    `SELECT p.*,s.name site_name,o.title opportunity_title,r.repository_head_sha,jsonb_array_length(COALESCE(p.structured_output->'change_items','[]')) files_affected FROM source_change_plans p JOIN sites s ON s.id=p.site_id JOIN opportunities o ON o.id=p.opportunity_id JOIN source_plan_runs r ON r.id=p.run_id WHERE p.status IN ('READY_FOR_REVIEW','APPROVED','STALE') ORDER BY p.created_at DESC LIMIT 100`,
+    `SELECT p.*,s.name site_name,coalesce(o.title,'Owner Research: '||c.query) opportunity_title,
+      r.repository_head_sha,jsonb_array_length(COALESCE(p.structured_output->'change_items','[]')) files_affected
+     FROM source_change_plans p JOIN sites s ON s.id=p.site_id
+     LEFT JOIN opportunities o ON o.id=p.opportunity_id
+     LEFT JOIN owner_research_cases c ON c.id=p.owner_research_case_id
+     JOIN source_plan_runs r ON r.id=p.run_id
+     WHERE p.status IN ('READY_FOR_REVIEW','APPROVED','STALE') ORDER BY p.created_at DESC LIMIT 100`,
   );
   return { rows: result.rows, timingMs: performance.now() - started };
 }

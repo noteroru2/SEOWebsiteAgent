@@ -77,6 +77,8 @@ export async function enqueueJob(input: unknown, database = getDatabase().db) {
       : ['ANALYZE_OPPORTUNITY', 'GENERATE_SOURCE_CHANGE_PLAN'].includes(value.type)
         ? {
             opportunityId: value.opportunityId,
+            ownerResearchCaseId: value.ownerResearchCaseId,
+            ownerAuthorizationId: value.ownerAuthorizationId,
             reanalyze: value.reanalyze === true,
             evidenceReevaluation: value.evidenceReevaluation === true,
             evidencePacketHash: value.evidencePacketHash,
@@ -92,7 +94,9 @@ export async function enqueueJob(input: unknown, database = getDatabase().db) {
     const opportunityCondition = ['ANALYZE_OPPORTUNITY', 'GENERATE_SOURCE_CHANGE_PLAN'].includes(
       value.type,
     )
-      ? sql`${schema.jobs.payload}->>'opportunityId' = ${value.opportunityId}`
+      ? value.ownerResearchCaseId
+        ? sql`${schema.jobs.payload}->>'ownerResearchCaseId' = ${value.ownerResearchCaseId}`
+        : sql`${schema.jobs.payload}->>'opportunityId' = ${value.opportunityId}`
       : undefined;
     const [active] = await database
       .select()

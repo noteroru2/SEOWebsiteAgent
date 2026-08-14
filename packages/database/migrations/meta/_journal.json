@@ -141,6 +141,13 @@
       "when": 1786809600000,
       "tag": "0019_owner_priority_research",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1786896000000,
+      "tag": "0020_owner_priority_v3",
+      "breakpoints": true
     }
   ]
 }

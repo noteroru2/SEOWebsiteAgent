@@ -663,9 +663,11 @@ export const sourcePlanRuns = pgTable(
     siteId: uuid('site_id')
       .notNull()
       .references(() => sites.id, { onDelete: 'cascade' }),
-    opportunityId: uuid('opportunity_id')
-      .notNull()
-      .references(() => opportunities.id, { onDelete: 'cascade' }),
+    opportunityId: uuid('opportunity_id').references(() => opportunities.id, {
+      onDelete: 'cascade',
+    }),
+    ownerResearchCaseId: uuid('owner_research_case_id'),
+    subjectType: text('subject_type').notNull().default('OPPORTUNITY'),
     repositoryId: uuid('repository_id')
       .notNull()
       .references(() => siteRepositories.id, { onDelete: 'restrict' }),
@@ -709,9 +711,11 @@ export const sourceChangePlans = pgTable(
     siteId: uuid('site_id')
       .notNull()
       .references(() => sites.id, { onDelete: 'cascade' }),
-    opportunityId: uuid('opportunity_id')
-      .notNull()
-      .references(() => opportunities.id, { onDelete: 'cascade' }),
+    opportunityId: uuid('opportunity_id').references(() => opportunities.id, {
+      onDelete: 'cascade',
+    }),
+    ownerResearchCaseId: uuid('owner_research_case_id'),
+    subjectType: text('subject_type').notNull().default('OPPORTUNITY'),
     verdict: text('verdict').notNull(),
     confidence: text('confidence').notNull(),
     batch5Reconciliation: text('batch5_reconciliation').notNull(),
@@ -762,6 +766,30 @@ export const ownerResearchCases = pgTable(
     index('owner_research_cases_site_status_idx').on(t.siteId, t.status, t.createdAt),
     index('owner_research_cases_opportunity_idx').on(t.opportunityId),
   ],
+);
+
+export const ownerResearchAiAuthorizations = pgTable(
+  'owner_research_ai_authorizations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    caseId: uuid('case_id')
+      .notNull()
+      .references(() => ownerResearchCases.id, { onDelete: 'cascade' }),
+    authorizationRef: text('authorization_ref').notNull().unique(),
+    scope: text('scope').notNull().default('OWNER_RESEARCH_V3'),
+    status: text('status').notNull().default('AUTHORIZED'),
+    authorizedBy: text('authorized_by').notNull(),
+    authorizedAt: timestamp('authorized_at', { withTimezone: true }).notNull().defaultNow(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    jobId: uuid('job_id')
+      .unique()
+      .references(() => jobs.id, { onDelete: 'set null' }),
+    runId: uuid('run_id')
+      .unique()
+      .references(() => sourcePlanRuns.id, { onDelete: 'set null' }),
+    ...timestamps,
+  },
+  (t) => [index('owner_research_ai_authorizations_case_idx').on(t.caseId, t.status, t.createdAt)],
 );
 
 export const ownerResearchRequests = pgTable(
@@ -1029,6 +1057,9 @@ export const aiUsage = pgTable(
     siteId: uuid('site_id').references(() => sites.id, { onDelete: 'set null' }),
     jobId: uuid('job_id').references(() => jobs.id, { onDelete: 'set null' }),
     opportunityId: uuid('opportunity_id').references(() => opportunities.id, {
+      onDelete: 'set null',
+    }),
+    ownerResearchCaseId: uuid('owner_research_case_id').references(() => ownerResearchCases.id, {
       onDelete: 'set null',
     }),
     analysisRunId: uuid('analysis_run_id').references(() => aiAnalysisRuns.id, {

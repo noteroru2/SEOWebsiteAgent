@@ -130,6 +130,8 @@ export const enqueueJobSchema = z
       .enum(['BOOTSTRAP_28D', 'MANUAL_90D', 'INCREMENTAL', 'EVIDENCE_PREVIOUS_28D'])
       .optional(),
     opportunityId: z.string().uuid().optional(),
+    ownerResearchCaseId: z.string().uuid().optional(),
+    ownerAuthorizationId: z.string().uuid().optional(),
     reanalyze: z.boolean().optional(),
     evidenceReevaluation: z.boolean().optional(),
     evidencePacketHash: z
@@ -169,12 +171,28 @@ export const enqueueJobSchema = z
         path: ['opportunityId'],
         message: 'ANALYZE_OPPORTUNITY requires siteId and opportunityId',
       });
-    if (value.type === 'GENERATE_SOURCE_CHANGE_PLAN' && (!value.siteId || !value.opportunityId))
-      ctx.addIssue({
-        code: 'custom',
-        path: ['opportunityId'],
-        message: 'GENERATE_SOURCE_CHANGE_PLAN requires siteId and opportunityId',
-      });
+    if (value.type === 'GENERATE_SOURCE_CHANGE_PLAN') {
+      const subjectCount =
+        Number(Boolean(value.opportunityId)) + Number(Boolean(value.ownerResearchCaseId));
+      if (!value.siteId || subjectCount !== 1)
+        ctx.addIssue({
+          code: 'custom',
+          path: ['opportunityId'],
+          message: 'GENERATE_SOURCE_CHANGE_PLAN requires siteId and exactly one analysis subject',
+        });
+      if (value.ownerResearchCaseId && !value.ownerAuthorizationId)
+        ctx.addIssue({
+          code: 'custom',
+          path: ['ownerAuthorizationId'],
+          message: 'Owner Research V3 requires one-time owner authorization',
+        });
+      if (value.opportunityId && value.ownerAuthorizationId)
+        ctx.addIssue({
+          code: 'custom',
+          path: ['ownerAuthorizationId'],
+          message: 'Opportunity V3 cannot consume Owner Research authorization',
+        });
+    }
     if (
       value.type === 'CAPTURE_SERP' &&
       (!value.siteId || !value.opportunityId || !value.captureId)

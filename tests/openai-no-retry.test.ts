@@ -84,6 +84,19 @@ function sourceInput() {
   };
 }
 
+function ownerResearchSourceInput() {
+  return {
+    subjectType: 'OWNER_RESEARCH_CASE' as const,
+    ownerResearch: {
+      subject: { type: 'OWNER_RESEARCH_CASE', id: crypto.randomUUID(), query: 'research query' },
+      gsc: { metrics: { clicks: 0, impressions: 15, ctr: 0, position: 5.6 } },
+      ownerFacts: [],
+      evidence: { serp: 'NONE' },
+    },
+    context,
+  };
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe('governed OpenAI no-retry transport', () => {
@@ -181,5 +194,25 @@ describe('governed OpenAI no-retry transport', () => {
       provider.generate(sourceInput(), new AbortController().signal),
     ).rejects.toBeTruthy();
     expect(attempts).toBe(1);
+  });
+
+  it('makes one Owner Research provider attempt with no fallback or repair', async () => {
+    let attempts = 0;
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', async (_url: unknown, init?: RequestInit) => {
+      attempts++;
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(JSON.stringify(responseBody({})), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const provider = new OpenAiSourcePlanProvider('test-key');
+    await expect(
+      provider.generate(ownerResearchSourceInput(), new AbortController().signal),
+    ).rejects.toBeTruthy();
+    expect(attempts).toBe(1);
+    expect(bodies[0]?.model).toBe('gpt-5.6-terra');
+    expect(bodies[0]?.tools).toBeUndefined();
   });
 });

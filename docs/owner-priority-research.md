@@ -8,4 +8,10 @@ Deterministic reassessment reads the current finalized GSC window and query-to-p
 
 `evidence_requests` remains the evidence provenance boundary. Each request belongs to exactly one subject through a database XOR constraint: either `opportunity_id` or `owner_research_case_id`. Existing Opportunity requests and all `evidence_items` relationships remain unchanged.
 
-Future Owner-Priority V3 support should introduce an exactly-one-subject analysis context and nullable research-case references in the AI/source-plan persistence path. That adaptation is intentionally not part of V1: current Batch 5/6 execution continues to require an Opportunity, and `READY_FOR_ANALYSIS` is a data-readiness state only.
+## V3 analysis subject
+
+The governed source-plan V3 pipeline accepts exactly one explicit analysis subject: an existing deterministic `OPPORTUNITY` or an `OWNER_RESEARCH_CASE`. Owner Research uses the case ID directly and never creates a synthetic Opportunity. Existing Opportunity analysis and historical prompt identities remain unchanged.
+
+Owner Research V3 requires a fresh one-time authorization row. `READY_FOR_ANALYSIS` remains a data-readiness state and cannot enqueue or execute AI by itself. The worker consumes authorization against one job and one run before the provider request. Governed AI jobs keep `max_attempts = 1`; stale in-flight jobs fail rather than requeue.
+
+The deterministic research context identity includes the case/query, stored finalized GSC window and queryÃ—page distribution, deterministic findings, clean source HEAD and mappings, current direct Owner Facts with provenance, and accepted optional evidence. SERP absence is explicit and is never synthesized. The subject-aware prompt is versioned as `source-change-plan-prompt-v4-owner-research` without rewriting historical V2/V3 identity.

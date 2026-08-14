@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import { createHash } from 'node:crypto';
 import {
   buildSourceContext,
   inspectRepository,
@@ -16,6 +17,17 @@ import { getDatabase } from './index';
 export const OWNER_RESEARCH_TYPE = 'OWNER_PRIORITY_SEO' as const;
 export const OWNER_RESEARCH_REASON = 'OWNER_BUSINESS_PRIORITY' as const;
 export const OWNER_RESEARCH_FOUNDATIONS_VERSION = 'owner-priority-research-v1';
+export const OWNER_RESEARCH_V3_CONTEXT_VERSION = 'owner-priority-v3-context-v1';
+
+function stable(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
+  if (value && typeof value === 'object')
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`)
+      .join(',')}}`;
+  return JSON.stringify(value);
+}
 
 export function normalizeOwnerResearchQuery(value: string) {
   const normalized = value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('th');
@@ -598,6 +610,179 @@ export async function getOwnerResearchCase(caseId: string, pool: Pool = getDatab
     sourceMappings: sources.rows,
     findings: findings.rows,
   };
+}
+
+export async function buildOwnerResearchV3Context(caseId: string, pool: Pool = getDatabase().pool) {
+  const record = await getOwnerResearchCase(caseId, pool);
+  if (!record)
+    throw Object.assign(new Error('Owner research case not found'), {
+      code: 'OWNER_RESEARCH_REQUIRED',
+    });
+  const researchCase = record.researchCase;
+  if (researchCase.status !== 'READY_FOR_ANALYSIS')
+    throw Object.assign(new Error('Owner research case is not ready for analysis'), {
+      code: 'OWNER_RESEARCH_NOT_READY',
+    });
+  if (researchCase.opportunity_id)
+    throw Object.assign(new Error('Owner research V3 cannot use a linked Opportunity'), {
+      code: 'ANALYSIS_SUBJECT_AMBIGUOUS',
+    });
+  const gsc = await storedGscContext(researchCase, pool);
+  if (!gsc.available || !gsc.pages.length)
+    throw Object.assign(new Error('Stored GSC context is required'), { code: 'GSC_DATA_REQUIRED' });
+  const conflicts = await pool.query(
+    `SELECT f.fact_key FROM owner_research_fact_links l JOIN owner_facts f ON f.id=l.fact_id
+     WHERE l.case_id=$1 AND f.status='ACTIVE' GROUP BY f.fact_key
+     HAVING count(DISTINCT f.value_json::text)>1`,
+    [caseId],
+  );
+  if (record.ownerFacts.length !== 13 || conflicts.rows.length)
+    throw Object.assign(new Error('Exactly 13 conflict-free owner facts are required'), {
+      code: 'OWNER_FACT_PREFLIGHT_FAILED',
+    });
+  if (!researchCase.source_head_sha || record.sourceMappings.length < 2)
+    throw Object.assign(new Error('Current mapped source context is required'), {
+      code: 'SOURCE_MAPPING_REQUIRED',
+    });
+  const evidence = (
+    await pool.query(
+      `SELECT r.id request_id,r.type,r.required,r.status,i.id item_id,i.source_type,i.evidence,
+        i.evidence_hash,i.observed_at,i.observed_timezone
+       FROM evidence_requests r LEFT JOIN evidence_items i ON i.request_id=r.id
+       WHERE r.owner_research_case_id=$1 AND r.status<>'SUPERSEDED'
+       ORDER BY r.created_at,r.id,i.observed_at NULLS LAST,i.created_at,i.id`,
+      [caseId],
+    )
+  ).rows;
+  const acceptedEvidence = evidence
+    .filter((item) => item.item_id)
+    .map((item) => ({
+      requestId: item.request_id,
+      type: item.type,
+      sourceType: item.source_type,
+      evidence: item.evidence,
+      evidenceHash: item.evidence_hash,
+      observedAt: item.observed_at ? new Date(item.observed_at).toISOString() : null,
+      observedTimezone: item.observed_timezone,
+    }));
+  const packet = {
+    contextVersion: OWNER_RESEARCH_V3_CONTEXT_VERSION,
+    subject: {
+      type: 'OWNER_RESEARCH_CASE' as const,
+      id: researchCase.id,
+      researchType: researchCase.research_type,
+      query: researchCase.query,
+      normalizedQuery: researchCase.normalized_query,
+      reason: researchCase.reason,
+      ownerRequestLanguage:
+        'The owner requested research on this commercially important query; this is context, not ranking evidence or change authorization.',
+      targetPage: researchCase.target_page,
+      primaryGscPage: researchCase.primary_gsc_page,
+    },
+    gsc: {
+      availability: 'STORED_FINALIZED',
+      period: gsc.windows?.current ?? null,
+      metrics: gsc.metrics,
+      queryPageDistribution: gsc.pages,
+      sampleCaution:
+        'LOW_SAMPLE: 15 impressions, 0 clicks, and no comparable previous sample; do not infer CTR causality or ranking loss.',
+      queryOwnershipInterpretation:
+        '14/15 impressions map to the office page and 1/15 to the company page; POTENTIAL_CANNIBALIZATION with UNPROVEN harm.',
+    },
+    deterministicFindings: record.findings.map((finding) => ({
+      type: finding.finding_type,
+      status: finding.finding_status,
+      summary: finding.summary,
+      evidence: finding.evidence,
+    })),
+    source: {
+      headSha: researchCase.source_head_sha,
+      mappings: record.sourceMappings.map((mapping) => ({
+        role: mapping.role,
+        routePath: mapping.route_path,
+        mappingStatus: mapping.mapping_status,
+        primarySourcePath: mapping.primary_source_path,
+        sourceHeadSha: mapping.source_head_sha,
+      })),
+    },
+    ownerFacts: record.ownerFacts.map((fact) => ({
+      factId: fact.id,
+      canonicalKey: fact.fact_key,
+      scope: { type: fact.scope_type, key: fact.scope_key },
+      value: fact.value_json,
+      factHash: fact.fact_hash,
+      provenance: 'OWNER_CONFIRMED_DIRECT',
+      reviewStatus: 'OWNER_CONFIRMED',
+      status: fact.status,
+    })),
+    evidence: {
+      items: acceptedEvidence,
+      requirements: evidence
+        .filter((item) => !item.item_id)
+        .map((item) => ({ type: item.type, required: item.required, status: item.status })),
+      serp: acceptedEvidence.some((item) => item.type === 'RESEARCH_SERP_OBSERVATION')
+        ? 'AVAILABLE'
+        : 'NONE',
+      newerGsc: acceptedEvidence.some((item) => item.type === 'RESEARCH_NEWER_GSC_WINDOW')
+        ? 'AVAILABLE'
+        : 'NONE',
+    },
+    excludedUnconfirmedClaims: [
+      'VAT registration',
+      'tax invoice',
+      'withholding tax',
+      'minimum pickup quantity or value',
+      'free pickup',
+      'same-day pickup or pickup SLA',
+      'certified wiping or NIST/DoD compliance',
+      'physical shredding or destruction certificate',
+    ],
+  };
+  return {
+    packet,
+    contextHash: createHash('sha256').update(stable(packet)).digest('hex'),
+  };
+}
+
+export async function recordOwnerResearchAiAuthorization(
+  input: {
+    caseId: string;
+    authorizationRef: string;
+    authorizedBy: string;
+    ownerAuthorized: true;
+  },
+  pool: Pool = getDatabase().pool,
+) {
+  if (input.ownerAuthorized !== true) throw new Error('Explicit owner authorization is required');
+  const result = await pool.query(
+    `INSERT INTO owner_research_ai_authorizations(case_id,authorization_ref,authorized_by)
+     SELECT id,$2,$3 FROM owner_research_cases WHERE id=$1 AND status='READY_FOR_ANALYSIS'
+     RETURNING *`,
+    [
+      input.caseId,
+      bounded(input.authorizationRef, 'authorization reference', 300),
+      bounded(input.authorizedBy, 'authorizer', 100),
+    ],
+  );
+  if (!result.rows[0]) throw new Error('Ready Owner Research case required');
+  return result.rows[0];
+}
+
+export async function consumeOwnerResearchAiAuthorization(
+  input: { authorizationId: string; caseId: string; jobId: string; runId: string },
+  pool: Pool = getDatabase().pool,
+) {
+  const result = await pool.query(
+    `UPDATE owner_research_ai_authorizations SET status='CONSUMED',consumed_at=now(),job_id=$3,
+       run_id=$4,updated_at=now() WHERE id=$1 AND case_id=$2 AND status='AUTHORIZED'
+       AND consumed_at IS NULL AND job_id IS NULL AND run_id IS NULL RETURNING *`,
+    [input.authorizationId, input.caseId, input.jobId, input.runId],
+  );
+  if (!result.rows[0])
+    throw Object.assign(new Error('Fresh one-time Owner Research authorization required'), {
+      code: 'OWNER_AUTHORIZATION_REQUIRED',
+    });
+  return result.rows[0];
 }
 
 export async function diagnoseSerpQuota(pool: Pool = getDatabase().pool) {

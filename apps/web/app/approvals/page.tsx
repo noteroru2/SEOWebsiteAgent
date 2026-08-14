@@ -16,7 +16,8 @@ export default async function ApprovalsPage() {
           <div className="eyebrow">Owner Control Center</div>
           <h1>Approvals & Release Control</h1>
           <p className="muted">
-            Govern website patches, evidence, validation, production release authorization, and rollback.
+            Govern website patches, evidence, validation, production release authorization, and
+            rollback.
           </p>
         </div>
       </div>
@@ -24,7 +25,8 @@ export default async function ApprovalsPage() {
       <section className="panel" style={{ marginBottom: '32px' }}>
         <h2>Patch Workflows ({workflows.rows.length})</h2>
         <p className="hint">
-          Governed Batch 8+ patch workflows. Approving a patch authorizes validation, NOT production release.
+          Governed Batch 8+ patch workflows. Approving a patch authorizes validation, NOT production
+          release.
         </p>
 
         {workflows.rows.length ? (
@@ -50,7 +52,9 @@ export default async function ApprovalsPage() {
                     <span className="provenance-tag prov-source">{wf.subjectType}</span>
                   </td>
                   <td>
-                    <div><strong>{wf.query || wf.targetRoutePath}</strong></div>
+                    <div>
+                      <strong>{wf.query || wf.targetRoutePath}</strong>
+                    </div>
                     <small className="muted">{wf.targetSourcePath}</small>
                   </td>
                   <td>
@@ -63,7 +67,19 @@ export default async function ApprovalsPage() {
                   </td>
                   <td>{wf.createdAt ? new Date(wf.createdAt).toLocaleDateString() : '—'}</td>
                   <td>
-                    <Link href={`/approvals/${wf.id}`} className="button" style={{ display: 'inline-block', padding: '4px 10px', fontSize: '13px', textDecoration: 'none', background: '#13271d', color: '#fff', borderRadius: '6px' }}>
+                    <Link
+                      href={`/approvals/${wf.id}`}
+                      className="button"
+                      style={{
+                        display: 'inline-block',
+                        padding: '4px 10px',
+                        fontSize: '13px',
+                        textDecoration: 'none',
+                        background: '#13271d',
+                        color: '#fff',
+                        borderRadius: '6px',
+                      }}
+                    >
                       Control Center &rarr;
                     </Link>
                   </td>

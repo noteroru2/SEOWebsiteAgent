@@ -90,3 +90,41 @@ export async function resetTestDatabase(pool: Pool) {
 }
 
 export const testDatabaseMarker = TEST_DATABASE_MARKER;
+
+export function isProductionDatabaseUrl(connectionString?: string): boolean {
+  const urlStr = connectionString || process.env.DATABASE_URL || '';
+  if (!urlStr) return process.env.NODE_ENV === 'production';
+  try {
+    const parsed = new URL(urlStr);
+    const databaseName = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
+    const isProdDbName = databaseName === 'seo_agent';
+    const isProdHost =
+      parsed.hostname === '195.201.94.169' ||
+      parsed.hostname === 'seo.amphontd.com' ||
+      parsed.hostname === 'amphon-app-prod';
+    const isProdAppUrl =
+      process.env.APP_BASE_URL === 'https://seo.amphontd.com' ||
+      process.env.APP_BASE_URL === 'https://seo.amphon.co.th';
+    const isProdEnv = process.env.NODE_ENV === 'production';
+    return isProdEnv || isProdDbName || isProdHost || isProdAppUrl;
+  } catch {
+    return process.env.NODE_ENV === 'production';
+  }
+}
+
+export function assertFixtureSafeDatabase(options?: { context?: string }) {
+  const isProd = isProductionDatabaseUrl();
+  const contextMsg = options?.context || 'fixture/seed execution';
+
+  if (isProd) {
+    throw new Error(
+      `FIXTURE_GUARD_BLOCKED: Fixture/seed/scratch database mutation is strictly prohibited against production environment or production database 'seo_agent' (${contextMsg}).`,
+    );
+  }
+
+  if (process.env.ALLOW_FIXTURE_DATA !== 'true') {
+    throw new Error(
+      `FIXTURE_GUARD_BLOCKED: Fixture/seed operations require ALLOW_FIXTURE_DATA=true in development/test environment (${contextMsg}).`,
+    );
+  }
+}

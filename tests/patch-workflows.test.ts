@@ -138,12 +138,17 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
               target_file: 'src/content/services/รับซื้อคอมบริษัท.md',
               target_route: '/บริการ/รับซื้อคอมบริษัท',
               change_type: 'MODIFY',
-              proposed_diff: 'Approved wording additions for inventory, data destruction assistance, quotation, and payment.',
+              proposed_diff:
+                'Approved wording additions for inventory, data destruction assistance, quotation, and payment.',
             },
           ],
           source_findings: [{ finding: 'Missing inventory and documentation process details' }],
           preserve: [
-            { field: 'title', value: 'รับซื้อคอมบริษัทและเครื่องพนักงาน ส่ง Asset List ประเมินก่อนขาย | Amphon.co.th' },
+            {
+              field: 'title',
+              value:
+                'รับซื้อคอมบริษัทและเครื่องพนักงาน ส่ง Asset List ประเมินก่อนขาย | Amphon.co.th',
+            },
             { field: 'h1', value: 'รับซื้อคอมบริษัทและเครื่องพนักงานเก่า ส่งรายการประเมินก่อนขาย' },
           ],
         },
@@ -230,7 +235,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
         sourceHeadSha: '063e159127f3d4a5445fd55aff08e66710b37ef5',
         targetRoutePath: '/บริการ/รับซื้อคอมบริษัท',
         targetSourcePath: 'src/content/services/รับซื้อคอมบริษัท.md',
-      })
+      }),
     ).rejects.toThrow('SUBJECT_MUTUAL_EXCLUSION_VIOLATION');
   });
 
@@ -277,7 +282,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
         sourceHeadSha: '063e159127f3d4a5445fd55aff08e66710b37ef5',
         targetRoutePath: '/บริการ/รับซื้อคอมบริษัท',
         targetSourcePath: 'src/content/services/รับซื้อคอมบริษัท.md',
-      })
+      }),
     ).rejects.toThrow('PATCH_GATE_FAILED');
   });
 
@@ -325,7 +330,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
         sourceHeadSha: '063e159127f3d4a5445fd55aff08e66710b37ef5',
         targetRoutePath: '/บริการ/รับซื้อคอมบริษัท',
         targetSourcePath: 'src/content/services/รับซื้อคอมบริษัท.md',
-      })
+      }),
     ).rejects.toThrow('PATCH_GATE_FAILED');
   });
 
@@ -354,7 +359,8 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
       targetSourcePath: 'src/content/services/รับซื้อคอมบริษัท.md',
     });
 
-    const diffContent = '--- a/src/content/services/รับซื้อคอมบริษัท.md\n+++ b/src/content/services/รับซื้อคอมบริษัท.md\n@@ -61,1 +61,1 @@\n- old text\n+ new text';
+    const diffContent =
+      '--- a/src/content/services/รับซื้อคอมบริษัท.md\n+++ b/src/content/services/รับซื้อคอมบริษัท.md\n@@ -61,1 +61,1 @@\n- old text\n+ new text';
 
     const preview1 = await generatePatchPreview(db, {
       workflowId: wf.id,
@@ -404,7 +410,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
         approvalType: 'PATCH_APPROVAL',
         actor: 'LOCAL_OWNER',
         decision: 'APPROVED',
-      })
+      }),
     ).rejects.toThrow('PREVIEW_HASH_MISMATCH');
 
     // Correct approval
@@ -493,7 +499,12 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
       workflowId: wf.id,
       checks: [
         { checkName: 'git_diff_check', status: 'PASS', isMandatory: true, summary: 'Clean diff' },
-        { checkName: 'production_build', status: 'BLOCKED', isMandatory: true, summary: 'Build environment unavailable' },
+        {
+          checkName: 'production_build',
+          status: 'BLOCKED',
+          isMandatory: true,
+          summary: 'Build environment unavailable',
+        },
       ],
     });
 
@@ -552,7 +563,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
         repositoryUrl: 'https://github.com/noteroru2/amphon.co.th.git',
         remoteBaseSha: '063e159127f3d4a5445fd55aff08e66710b37ef5',
         releaseCommitSha: 'e42c635108039a44c87533d81581abb1913952ee',
-      })
+      }),
     ).rejects.toThrow('RELEASE_REQUIRES_RELEASE_AUTHORIZED');
 
     // Separate explicit release authorization
@@ -628,7 +639,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
         remoteBaseSha: '063e159127f3d4a5445fd55aff08e66710b37ef5',
         releaseCommitSha: 'e42c635108039a44c87533d81581abb1913952ee',
         pushType: 'FORCE', // Prohibited!
-      })
+      }),
     ).rejects.toThrow('FORCE_PUSH_PROHIBITED');
   });
 
@@ -754,7 +765,8 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
     const preview = await generatePatchPreview(db, {
       workflowId: wf.id,
       baseSourceHeadSha: '063e159127f3d4a5445fd55aff08e66710b37ef5',
-      unifiedDiff: 'diff --git a/src/content/services/รับซื้อคอมบริษัท.md b/src/content/services/รับซื้อคอมบริษัท.md',
+      unifiedDiff:
+        'diff --git a/src/content/services/รับซื้อคอมบริษัท.md b/src/content/services/รับซื้อคอมบริษัท.md',
       changeSummary: { itemsCount: 1 },
       claimTraceability: { facts: ['Asset List', 'Data destruction', 'Quotation', 'Payment'] },
       forbiddenClaimsFindings: { forbidden: [] },
@@ -774,12 +786,42 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
       workflowId: wf.id,
       checks: [
         { checkName: 'git_diff_check', status: 'PASS', isMandatory: true, summary: 'Clean diff' },
-        { checkName: 'frontmatter_validation', status: 'PASS', isMandatory: true, summary: 'Valid frontmatter' },
-        { checkName: 'content_validation', status: 'PASS', isMandatory: true, summary: 'Valid markdown' },
-        { checkName: 'duplicate_headings_check', status: 'PASS', isMandatory: true, summary: '0 duplicates' },
-        { checkName: 'internal_links_check', status: 'PASS', isMandatory: true, summary: '0 broken links' },
-        { checkName: 'forbidden_claims_scan', status: 'PASS', isMandatory: true, summary: '0 forbidden claims' },
-        { checkName: 'production_build', status: 'PASS', isMandatory: true, summary: 'Build exit code 0' },
+        {
+          checkName: 'frontmatter_validation',
+          status: 'PASS',
+          isMandatory: true,
+          summary: 'Valid frontmatter',
+        },
+        {
+          checkName: 'content_validation',
+          status: 'PASS',
+          isMandatory: true,
+          summary: 'Valid markdown',
+        },
+        {
+          checkName: 'duplicate_headings_check',
+          status: 'PASS',
+          isMandatory: true,
+          summary: '0 duplicates',
+        },
+        {
+          checkName: 'internal_links_check',
+          status: 'PASS',
+          isMandatory: true,
+          summary: '0 broken links',
+        },
+        {
+          checkName: 'forbidden_claims_scan',
+          status: 'PASS',
+          isMandatory: true,
+          summary: '0 forbidden claims',
+        },
+        {
+          checkName: 'production_build',
+          status: 'PASS',
+          isMandatory: true,
+          summary: 'Build exit code 0',
+        },
       ],
     });
 

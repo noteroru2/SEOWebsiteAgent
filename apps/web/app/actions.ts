@@ -453,7 +453,11 @@ function safeRevalidatePath(pathStr: string) {
   }
 }
 
-export async function approveWorkflowPatchAction(workflowId: string, previewId: string, previewHash: string) {
+export async function approveWorkflowPatchAction(
+  workflowId: string,
+  previewId: string,
+  previewHash: string,
+) {
   const { db } = getDatabase();
   await recordWorkflowApproval(db, {
     workflowId,
@@ -471,7 +475,7 @@ export async function rejectWorkflowPatchAction(
   workflowId: string,
   previewId: string,
   previewHash: string,
-  formData?: FormData
+  formData?: FormData,
 ) {
   const { db } = getDatabase();
   const reason = formData ? String(formData.get('reason') ?? '').trim() : undefined;
@@ -493,12 +497,42 @@ export async function runWorkflowValidationAction(workflowId: string) {
   await runWorkflowValidationPipeline(db, {
     workflowId,
     checks: [
-      { checkName: 'git_diff_check', status: 'PASS', isMandatory: true, summary: 'Exact unified diff checked without syntax errors.' },
-      { checkName: 'frontmatter_validation', status: 'PASS', isMandatory: true, summary: 'YAML frontmatter title, meta, and canonical keys parsed.' },
-      { checkName: 'duplicate_headings_check', status: 'PASS', isMandatory: true, summary: 'Single H1 structure maintained.' },
-      { checkName: 'internal_links_check', status: 'PASS', isMandatory: true, summary: 'Internal links verified.' },
-      { checkName: 'forbidden_claims_scan', status: 'PASS', isMandatory: true, summary: 'Zero forbidden claims detected.' },
-      { checkName: 'production_build', status: 'PASS', isMandatory: true, summary: 'Production build simulation completed.' },
+      {
+        checkName: 'git_diff_check',
+        status: 'PASS',
+        isMandatory: true,
+        summary: 'Exact unified diff checked without syntax errors.',
+      },
+      {
+        checkName: 'frontmatter_validation',
+        status: 'PASS',
+        isMandatory: true,
+        summary: 'YAML frontmatter title, meta, and canonical keys parsed.',
+      },
+      {
+        checkName: 'duplicate_headings_check',
+        status: 'PASS',
+        isMandatory: true,
+        summary: 'Single H1 structure maintained.',
+      },
+      {
+        checkName: 'internal_links_check',
+        status: 'PASS',
+        isMandatory: true,
+        summary: 'Internal links verified.',
+      },
+      {
+        checkName: 'forbidden_claims_scan',
+        status: 'PASS',
+        isMandatory: true,
+        summary: 'Zero forbidden claims detected.',
+      },
+      {
+        checkName: 'production_build',
+        status: 'PASS',
+        isMandatory: true,
+        summary: 'Production build simulation completed.',
+      },
     ],
   });
   safeRevalidatePath('/approvals');
@@ -510,7 +544,7 @@ export async function authorizeWorkflowReleaseAction(
   previewId: string,
   previewHash: string,
   targetCommitSha: string,
-  remoteBaseSha: string
+  remoteBaseSha: string,
 ) {
   const { db } = getDatabase();
   await recordWorkflowApproval(db, {
@@ -532,7 +566,7 @@ export async function requestWorkflowRollbackAction(
   targetReleaseId: string,
   productionCommitSha: string,
   previousGoodCommitSha: string,
-  formData: FormData
+  formData: FormData,
 ) {
   const { db } = getDatabase();
   const reason = String(formData.get('reason') ?? 'Owner initiated rollback').trim();
@@ -540,12 +574,18 @@ export async function requestWorkflowRollbackAction(
   const approvalRows = await db
     .select()
     .from(patchApprovals)
-    .where(and(eq(patchApprovals.workflowId, workflowId), eq(patchApprovals.approvalType, 'RELEASE_AUTHORIZATION')))
+    .where(
+      and(
+        eq(patchApprovals.workflowId, workflowId),
+        eq(patchApprovals.approvalType, 'RELEASE_AUTHORIZATION'),
+      ),
+    )
     .orderBy(desc(patchApprovals.createdAt))
     .limit(1);
 
   const authorizationId = approvalRows[0]?.id;
-  if (!authorizationId) throw new Error('RELEASE_AUTHORIZATION_NOT_FOUND: Rollback requires an authorized release');
+  if (!authorizationId)
+    throw new Error('RELEASE_AUTHORIZATION_NOT_FOUND: Rollback requires an authorized release');
 
   await recordWorkflowRollback(db, {
     workflowId,

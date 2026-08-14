@@ -90,7 +90,9 @@ export function evaluatePatchGate(planRecord: any): PatchGateResult {
   const notStale = !isStale;
   const referencesValid = Array.isArray(output.change_items) && output.change_items.length > 0;
   const sourceComplete = Array.isArray(output.source_findings) && output.source_findings.length > 0;
-  const evidenceResolved = !output.additional_evidence_needed?.some((e: string) => e.includes('BLOCKING'));
+  const evidenceResolved = !output.additional_evidence_needed?.some((e: string) =>
+    e.includes('BLOCKING'),
+  );
   const concreteTarget = !!output.change_items?.[0]?.target_file;
   const boundedChange = (output.change_items?.length || 0) <= 5;
   const ownerFactsSupported = true;
@@ -141,16 +143,20 @@ export async function createPatchWorkflow(
     targetRoutePath: string;
     targetSourcePath: string;
     risk?: 'LOW' | 'MEDIUM' | 'HIGH';
-  }
+  },
 ) {
   // 1. Exactly one subject validation
   if (params.subjectType === 'OPPORTUNITY') {
     if (!params.opportunityId || params.ownerResearchCaseId) {
-      throw new Error('SUBJECT_MUTUAL_EXCLUSION_VIOLATION: OPPORTUNITY subject requires opportunityId and no ownerResearchCaseId');
+      throw new Error(
+        'SUBJECT_MUTUAL_EXCLUSION_VIOLATION: OPPORTUNITY subject requires opportunityId and no ownerResearchCaseId',
+      );
     }
   } else if (params.subjectType === 'OWNER_RESEARCH_CASE') {
     if (!params.ownerResearchCaseId || params.opportunityId) {
-      throw new Error('SUBJECT_MUTUAL_EXCLUSION_VIOLATION: OWNER_RESEARCH_CASE subject requires ownerResearchCaseId and no opportunityId');
+      throw new Error(
+        'SUBJECT_MUTUAL_EXCLUSION_VIOLATION: OWNER_RESEARCH_CASE subject requires ownerResearchCaseId and no opportunityId',
+      );
     }
   } else {
     throw new Error(`INVALID_SUBJECT_TYPE: ${params.subjectType}`);
@@ -209,19 +215,28 @@ export async function generatePatchPreview(
   params: {
     workflowId: string;
     baseSourceHeadSha?: string;
+    baseSourceSha?: string;
+    targetSourcePath?: string;
     unifiedDiff?: string;
     changeSummary?: any;
     claimTraceability?: any;
     forbiddenClaimsFindings?: any;
     preservationChecks?: any;
-  }
+    workspaceRoot?: string;
+  },
 ) {
-  const wfRows = await db.select().from(patchWorkflows).where(eq(patchWorkflows.id, params.workflowId)).limit(1);
+  const wfRows = await db
+    .select()
+    .from(patchWorkflows)
+    .where(eq(patchWorkflows.id, params.workflowId))
+    .limit(1);
   if (!wfRows.length) throw new Error(`WORKFLOW_NOT_FOUND: ${params.workflowId}`);
   const wf = wfRows[0];
 
   if (!canTransition(wf.status, 'PREVIEW_READY')) {
-    throw new Error(`INVALID_WORKFLOW_TRANSITION: Cannot transition workflow ${wf.id} from ${wf.status} to PREVIEW_READY`);
+    throw new Error(
+      `INVALID_WORKFLOW_TRANSITION: Cannot transition workflow ${wf.id} from ${wf.status} to PREVIEW_READY`,
+    );
   }
 
   const baseSourceHeadSha = params.baseSourceHeadSha || wf.sourceHeadSha;
@@ -282,13 +297,21 @@ export async function recordWorkflowApproval(
     reason?: string;
     targetCommitSha?: string;
     remoteBaseSha?: string;
-  }
+  },
 ) {
-  const wfRows = await db.select().from(patchWorkflows).where(eq(patchWorkflows.id, params.workflowId)).limit(1);
+  const wfRows = await db
+    .select()
+    .from(patchWorkflows)
+    .where(eq(patchWorkflows.id, params.workflowId))
+    .limit(1);
   if (!wfRows.length) throw new Error(`WORKFLOW_NOT_FOUND: ${params.workflowId}`);
   const wf = wfRows[0];
 
-  const prevRows = await db.select().from(patchPreviews).where(eq(patchPreviews.id, params.previewId)).limit(1);
+  const prevRows = await db
+    .select()
+    .from(patchPreviews)
+    .where(eq(patchPreviews.id, params.previewId))
+    .limit(1);
   if (!prevRows.length) throw new Error(`PREVIEW_NOT_FOUND: ${params.previewId}`);
   const preview = prevRows[0];
 
@@ -297,22 +320,35 @@ export async function recordWorkflowApproval(
   }
 
   if (preview.previewHash !== params.previewHash) {
-    throw new Error(`PREVIEW_HASH_MISMATCH: Provided preview hash ${params.previewHash} does not match preview record hash ${preview.previewHash}`);
+    throw new Error(
+      `PREVIEW_HASH_MISMATCH: Provided preview hash ${params.previewHash} does not match preview record hash ${preview.previewHash}`,
+    );
   }
 
   let nextStatus: PatchWorkflowStatus;
   if (params.approvalType === 'PATCH_APPROVAL') {
-    if (!canTransition(wf.status, params.decision === 'APPROVED' ? 'APPROVED_FOR_VALIDATION' : 'REJECTED')) {
-      throw new Error(`INVALID_WORKFLOW_TRANSITION: Cannot perform PATCH_APPROVAL in status ${wf.status}`);
+    if (
+      !canTransition(
+        wf.status,
+        params.decision === 'APPROVED' ? 'APPROVED_FOR_VALIDATION' : 'REJECTED',
+      )
+    ) {
+      throw new Error(
+        `INVALID_WORKFLOW_TRANSITION: Cannot perform PATCH_APPROVAL in status ${wf.status}`,
+      );
     }
     nextStatus = params.decision === 'APPROVED' ? 'APPROVED_FOR_VALIDATION' : 'REJECTED';
   } else if (params.approvalType === 'RELEASE_AUTHORIZATION') {
     if (wf.status !== 'RELEASE_READY') {
-      throw new Error(`RELEASE_AUTHORIZATION_REQUIRES_RELEASE_READY: Cannot authorize release when workflow status is ${wf.status}`);
+      throw new Error(
+        `RELEASE_AUTHORIZATION_REQUIRES_RELEASE_READY: Cannot authorize release when workflow status is ${wf.status}`,
+      );
     }
     if (params.decision === 'APPROVED') {
       if (!params.targetCommitSha || !params.remoteBaseSha) {
-        throw new Error('RELEASE_AUTHORIZATION_MISSING_SHA: Release authorization requires targetCommitSha and remoteBaseSha');
+        throw new Error(
+          'RELEASE_AUTHORIZATION_MISSING_SHA: Release authorization requires targetCommitSha and remoteBaseSha',
+        );
       }
       nextStatus = 'RELEASE_AUTHORIZED';
     } else {
@@ -367,14 +403,20 @@ export async function runWorkflowValidationPipeline(
       summary: string;
       diagnosticsJson?: any;
     }>;
-  }
+  },
 ) {
-  const wfRows = await db.select().from(patchWorkflows).where(eq(patchWorkflows.id, params.workflowId)).limit(1);
+  const wfRows = await db
+    .select()
+    .from(patchWorkflows)
+    .where(eq(patchWorkflows.id, params.workflowId))
+    .limit(1);
   if (!wfRows.length) throw new Error(`WORKFLOW_NOT_FOUND: ${params.workflowId}`);
   const wf = wfRows[0];
 
   if (!canTransition(wf.status, 'VALIDATING')) {
-    throw new Error(`INVALID_WORKFLOW_TRANSITION: Cannot transition workflow ${wf.id} from ${wf.status} to VALIDATING`);
+    throw new Error(
+      `INVALID_WORKFLOW_TRANSITION: Cannot transition workflow ${wf.id} from ${wf.status} to VALIDATING`,
+    );
   }
 
   await db
@@ -406,7 +448,9 @@ export async function runWorkflowValidationPipeline(
     validationRecords.push(rec);
   }
 
-  const finalStatus: PatchWorkflowStatus = allMandatoryPassed ? 'RELEASE_READY' : 'VALIDATION_FAILED';
+  const finalStatus: PatchWorkflowStatus = allMandatoryPassed
+    ? 'RELEASE_READY'
+    : 'VALIDATION_FAILED';
 
   await db
     .update(patchWorkflows)
@@ -441,14 +485,20 @@ export async function recordWorkflowRelease(
     deploymentId?: string;
     deploymentSha?: string;
     isDryRun?: boolean;
-  }
+  },
 ) {
-  const wfRows = await db.select().from(patchWorkflows).where(eq(patchWorkflows.id, params.workflowId)).limit(1);
+  const wfRows = await db
+    .select()
+    .from(patchWorkflows)
+    .where(eq(patchWorkflows.id, params.workflowId))
+    .limit(1);
   if (!wfRows.length) throw new Error(`WORKFLOW_NOT_FOUND: ${params.workflowId}`);
   const wf = wfRows[0];
 
   if (wf.status !== 'RELEASE_AUTHORIZED') {
-    throw new Error(`RELEASE_REQUIRES_RELEASE_AUTHORIZED: Cannot release workflow in status ${wf.status}`);
+    throw new Error(
+      `RELEASE_REQUIRES_RELEASE_AUTHORIZED: Cannot release workflow in status ${wf.status}`,
+    );
   }
 
   const pushType = params.pushType || 'FAST_FORWARD';
@@ -510,9 +560,13 @@ export async function verifyWorkflowRelease(
     contentMarkersPresent: boolean;
     forbiddenClaimsFound: string[];
     deploymentShaMatches: boolean;
-  }
+  },
 ) {
-  const wfRows = await db.select().from(patchWorkflows).where(eq(patchWorkflows.id, params.workflowId)).limit(1);
+  const wfRows = await db
+    .select()
+    .from(patchWorkflows)
+    .where(eq(patchWorkflows.id, params.workflowId))
+    .limit(1);
   if (!wfRows.length) throw new Error(`WORKFLOW_NOT_FOUND: ${params.workflowId}`);
   const wf = wfRows[0];
 
@@ -541,7 +595,11 @@ export async function verifyWorkflowRelease(
     oldState: wf.status,
     newState: nextStatus,
     summary: isVerified ? 'Production verification passed' : 'Production verification failed',
-    detailsJson: { isVerified, httpStatus: params.httpStatus, forbiddenClaimsFound: params.forbiddenClaimsFound },
+    detailsJson: {
+      isVerified,
+      httpStatus: params.httpStatus,
+      forbiddenClaimsFound: params.forbiddenClaimsFound,
+    },
   });
 
   return { isVerified, status: nextStatus };
@@ -557,14 +615,20 @@ export async function recordWorkflowRollback(
     reason: string;
     authorizationId: string;
     rollbackCommitSha?: string;
-  }
+  },
 ) {
-  const wfRows = await db.select().from(patchWorkflows).where(eq(patchWorkflows.id, params.workflowId)).limit(1);
+  const wfRows = await db
+    .select()
+    .from(patchWorkflows)
+    .where(eq(patchWorkflows.id, params.workflowId))
+    .limit(1);
   if (!wfRows.length) throw new Error(`WORKFLOW_NOT_FOUND: ${params.workflowId}`);
   const wf = wfRows[0];
 
   if (!canTransition(wf.status, 'ROLLBACK_REQUIRED')) {
-    throw new Error(`INVALID_WORKFLOW_TRANSITION: Cannot request rollback for workflow in status ${wf.status}`);
+    throw new Error(
+      `INVALID_WORKFLOW_TRANSITION: Cannot request rollback for workflow in status ${wf.status}`,
+    );
   }
 
   const [rollback] = await db
@@ -600,13 +664,23 @@ export async function recordWorkflowRollback(
   return rollback;
 }
 
-export async function checkWorkflowStale(db: any, params: { workflowId: string; currentSourceHeadSha: string }) {
-  const wfRows = await db.select().from(patchWorkflows).where(eq(patchWorkflows.id, params.workflowId)).limit(1);
+export async function checkWorkflowStale(
+  db: any,
+  params: { workflowId: string; currentSourceHeadSha: string },
+) {
+  const wfRows = await db
+    .select()
+    .from(patchWorkflows)
+    .where(eq(patchWorkflows.id, params.workflowId))
+    .limit(1);
   if (!wfRows.length) return false;
   const wf = wfRows[0];
 
   if (wf.sourceHeadSha !== params.currentSourceHeadSha) {
-    await db.update(patchWorkflows).set({ status: 'STALE', updatedAt: new Date() }).where(eq(patchWorkflows.id, wf.id));
+    await db
+      .update(patchWorkflows)
+      .set({ status: 'STALE', updatedAt: new Date() })
+      .where(eq(patchWorkflows.id, wf.id));
 
     await db.update(patchPreviews).set({ stale: true }).where(eq(patchPreviews.workflowId, wf.id));
 
@@ -636,7 +710,7 @@ export async function recordWorkflowAudit(
     newState?: string | null;
     summary: string;
     detailsJson?: any;
-  }
+  },
 ) {
   const [event] = await db
     .insert(patchWorkflowAuditEvents)
@@ -682,14 +756,22 @@ export async function listPatchWorkflows(db: any) {
 }
 
 export async function getPatchWorkflowDetail(db: any, workflowId: string) {
-  const wfRows = await db.select().from(patchWorkflows).where(eq(patchWorkflows.id, workflowId)).limit(1);
+  const wfRows = await db
+    .select()
+    .from(patchWorkflows)
+    .where(eq(patchWorkflows.id, workflowId))
+    .limit(1);
   if (!wfRows.length) return null;
   const workflow = wfRows[0];
 
   const siteRows = await db.select().from(sites).where(eq(sites.id, workflow.siteId)).limit(1);
   const site = siteRows[0] || null;
 
-  const planRows = await db.select().from(sourceChangePlans).where(eq(sourceChangePlans.id, workflow.sourceChangePlanId)).limit(1);
+  const planRows = await db
+    .select()
+    .from(sourceChangePlans)
+    .where(eq(sourceChangePlans.id, workflow.sourceChangePlanId))
+    .limit(1);
   const plan = planRows[0] || null;
 
   const previewRows = await db
@@ -736,13 +818,21 @@ export async function getPatchWorkflowDetail(db: any, workflowId: string) {
 
   let caseRecord = null;
   if (workflow.ownerResearchCaseId) {
-    const caseRows = await db.select().from(ownerResearchCases).where(eq(ownerResearchCases.id, workflow.ownerResearchCaseId)).limit(1);
+    const caseRows = await db
+      .select()
+      .from(ownerResearchCases)
+      .where(eq(ownerResearchCases.id, workflow.ownerResearchCaseId))
+      .limit(1);
     caseRecord = caseRows[0] || null;
   }
 
   let opportunityRecord = null;
   if (workflow.opportunityId) {
-    const oppRows = await db.select().from(opportunities).where(eq(opportunities.id, workflow.opportunityId)).limit(1);
+    const oppRows = await db
+      .select()
+      .from(opportunities)
+      .where(eq(opportunities.id, workflow.opportunityId))
+      .limit(1);
     opportunityRecord = oppRows[0] || null;
   }
 
@@ -763,4 +853,3 @@ export async function getPatchWorkflowDetail(db: any, workflowId: string) {
     gateResult,
   };
 }
-

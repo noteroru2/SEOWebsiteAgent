@@ -124,12 +124,17 @@ describe('Batch 9 — Owner Approval / Release / Rollback UI & Control Plane', (
               target_file: 'src/content/services/รับซื้อคอมบริษัท.md',
               target_route: '/บริการ/รับซื้อคอมบริษัท',
               change_type: 'MODIFY',
-              proposed_diff: 'Approved wording additions for inventory, data destruction assistance, quotation, and payment.',
+              proposed_diff:
+                'Approved wording additions for inventory, data destruction assistance, quotation, and payment.',
             },
           ],
           source_findings: [{ finding: 'Missing inventory and documentation process details' }],
           preserve: [
-            { field: 'title', value: 'รับซื้อคอมบริษัทและเครื่องพนักงาน ส่ง Asset List ประเมินก่อนขาย | Amphon.co.th' },
+            {
+              field: 'title',
+              value:
+                'รับซื้อคอมบริษัทและเครื่องพนักงาน ส่ง Asset List ประเมินก่อนขาย | Amphon.co.th',
+            },
             { field: 'h1', value: 'รับซื้อคอมบริษัทและเครื่องพนักงานเก่า ส่งรายการประเมินก่อนขาย' },
           ],
           claim_traceability: [
@@ -217,7 +222,7 @@ describe('Batch 9 — Owner Approval / Release / Rollback UI & Control Plane', (
 
     // Verify release authorization does NOT exist yet!
     const releaseAuthExists = detailAfterApproval?.approvals.some(
-      (a: any) => a.approvalType === 'RELEASE_AUTHORIZATION'
+      (a: any) => a.approvalType === 'RELEASE_AUTHORIZATION',
     );
     expect(releaseAuthExists).toBe(false);
 
@@ -230,7 +235,7 @@ describe('Batch 9 — Owner Approval / Release / Rollback UI & Control Plane', (
         repositoryUrl: 'https://github.com/noteroru2/amphon.co.th.git',
         remoteBaseSha: 'e42c635108039a44c87533d81581abb1913952ee',
         releaseCommitSha: 'e42c635108039a44c87533d81581abb1913952ee',
-      })
+      }),
     ).rejects.toThrow('RELEASE_REQUIRES_RELEASE_AUTHORIZED');
   });
 
@@ -297,13 +302,13 @@ describe('Batch 9 — Owner Approval / Release / Rollback UI & Control Plane', (
       preview.id,
       preview.previewHash,
       'e42c635108039a44c87533d81581abb1913952ee',
-      'e42c635108039a44c87533d81581abb1913952ee'
+      'e42c635108039a44c87533d81581abb1913952ee',
     );
 
     const detailAfterReleaseAuth = await getPatchWorkflowDetail(db, wf.id);
     expect(detailAfterReleaseAuth?.workflow.status).toBe('RELEASE_AUTHORIZED');
     const releaseAuth = detailAfterReleaseAuth?.approvals.find(
-      (a: any) => a.approvalType === 'RELEASE_AUTHORIZATION'
+      (a: any) => a.approvalType === 'RELEASE_AUTHORIZATION',
     );
     expect(releaseAuth).toBeDefined();
     expect(releaseAuth?.decision).toBe('APPROVED');
@@ -334,11 +339,11 @@ describe('Batch 9 — Owner Approval / Release / Rollback UI & Control Plane', (
       preview.id,
       preview.previewHash,
       'e42c635108039a44c87533d81581abb1913952ee',
-      'e42c635108039a44c87533d81581abb1913952ee'
+      'e42c635108039a44c87533d81581abb1913952ee',
     );
 
     const releaseAuth = (await getPatchWorkflowDetail(db, wf.id))?.approvals.find(
-      (a: any) => a.approvalType === 'RELEASE_AUTHORIZATION'
+      (a: any) => a.approvalType === 'RELEASE_AUTHORIZATION',
     );
 
     const release = await recordWorkflowRelease(db, {
@@ -360,13 +365,13 @@ describe('Batch 9 — Owner Approval / Release / Rollback UI & Control Plane', (
       release.id,
       'e42c635108039a44c87533d81581abb1913952ee',
       '063e159127f3d4a5445fd55aff08e66710b37ef5',
-      formData
+      formData,
     );
 
     const detailAfterRollback = await getPatchWorkflowDetail(db, wf.id);
     expect(detailAfterRollback?.workflow.status).toBe('ROLLED_BACK');
     expect(detailAfterRollback?.latestRollback?.reason).toBe(
-      'Found unexpected pricing table discrepancy on live page'
+      'Found unexpected pricing table discrepancy on live page',
     );
     expect(detailAfterRollback?.latestRollback?.status).toBe('EXECUTED');
   });

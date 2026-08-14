@@ -15,6 +15,7 @@ export * from './evidence-automation';
 export * from './serp-providers';
 export * from './owner-research';
 export * from './patch-workflows';
+export * from './test-safety';
 export type Database = ReturnType<typeof drizzle<typeof schema>>;
 let singleton: { pool: Pool; db: Database } | undefined;
 

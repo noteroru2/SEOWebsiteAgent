@@ -77,6 +77,7 @@ export async function assertTestDatabaseConnection(pool: Pool) {
 export async function resetTestDatabase(pool: Pool) {
   await assertTestDatabaseConnection(pool);
   await pool.query(`TRUNCATE
+    patch_workflow_audit_events,patch_rollbacks,patch_releases,patch_validations,patch_workspace_runs,patch_approvals,patch_previews,patch_workflows,source_change_plans,source_plan_runs,
     serp_provider_reservations,serp_api_captures,serp_location_profiles,serp_provider_usage_periods,serp_provider_configs,
     browser_capture_tokens,serp_captures,evidence_items,evidence_requests,owner_research_findings,owner_research_source_links,
     owner_research_fact_links,owner_research_requests,owner_research_cases,owner_fact_confirmation_links,owner_facts,owner_fact_confirmations,

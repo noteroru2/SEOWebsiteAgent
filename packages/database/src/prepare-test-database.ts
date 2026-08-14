@@ -25,6 +25,8 @@ try {
 const database = createDatabase(target.url);
 try {
   await migrate(database.db, { migrationsFolder: 'packages/database/migrations' });
+  const sql0021 = (await import('fs')).readFileSync('packages/database/migrations/0021_batch7_patch_workflows.sql', 'utf8');
+  await database.pool.query(sql0021);
   await database.pool.query(
     `CREATE TABLE IF NOT EXISTS test_database_guard (
       id boolean PRIMARY KEY DEFAULT true CHECK (id),

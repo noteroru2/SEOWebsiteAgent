@@ -1096,3 +1096,180 @@ export const systemEvents = pgTable(
   },
   (t) => [index('system_events_source_created_idx').on(t.source, t.createdAt)],
 );
+
+export const patchWorkflows = pgTable(
+  'patch_workflows',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    subjectType: text('subject_type').notNull(),
+    opportunityId: uuid('opportunity_id').references(() => opportunities.id, { onDelete: 'cascade' }),
+    ownerResearchCaseId: uuid('owner_research_case_id').references(() => ownerResearchCases.id, { onDelete: 'cascade' }),
+    sourceChangePlanId: uuid('source_change_plan_id')
+      .notNull()
+      .references(() => sourceChangePlans.id, { onDelete: 'cascade' }),
+    sourceHeadSha: text('source_head_sha').notNull(),
+    status: text('status').notNull().default('REVIEW_REQUIRED'),
+    risk: text('risk').notNull().default('MEDIUM'),
+    targetRoutePath: text('target_route_path').notNull(),
+    targetSourcePath: text('target_source_path').notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    index('patch_workflows_status_idx').on(t.status, t.createdAt),
+    index('patch_workflows_site_idx').on(t.siteId, t.createdAt),
+  ],
+);
+
+export const patchPreviews = pgTable(
+  'patch_previews',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => patchWorkflows.id, { onDelete: 'cascade' }),
+    sourceChangePlanId: uuid('source_change_plan_id')
+      .notNull()
+      .references(() => sourceChangePlans.id, { onDelete: 'cascade' }),
+    baseSourceHeadSha: text('base_source_head_sha').notNull(),
+    targetSourcePath: text('target_source_path').notNull(),
+    previewHash: text('preview_hash').notNull(),
+    unifiedDiff: text('unified_diff').notNull(),
+    changeSummary: jsonb('change_summary').notNull(),
+    claimTraceability: jsonb('claim_traceability').notNull(),
+    forbiddenClaimsFindings: jsonb('forbidden_claims_findings').notNull(),
+    preservationChecks: jsonb('preservation_checks').notNull(),
+    stale: boolean('stale').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('patch_previews_workflow_idx').on(t.workflowId, t.createdAt)],
+);
+
+export const patchApprovals = pgTable(
+  'patch_approvals',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => patchWorkflows.id, { onDelete: 'cascade' }),
+    previewId: uuid('preview_id')
+      .notNull()
+      .references(() => patchPreviews.id, { onDelete: 'cascade' }),
+    previewHash: text('preview_hash').notNull(),
+    approvalType: text('approval_type').notNull(),
+    actor: text('actor').notNull(),
+    decision: text('decision').notNull(),
+    reason: text('reason'),
+    targetCommitSha: text('target_commit_sha'),
+    remoteBaseSha: text('remote_base_sha'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('patch_approvals_workflow_idx').on(t.workflowId, t.createdAt)],
+);
+
+export const patchWorkspaceRuns = pgTable(
+  'patch_workspace_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => patchWorkflows.id, { onDelete: 'cascade' }),
+    previewId: uuid('preview_id')
+      .notNull()
+      .references(() => patchPreviews.id, { onDelete: 'cascade' }),
+    workspacePath: text('workspace_path').notNull(),
+    baseCommitSha: text('base_commit_sha').notNull(),
+    appliedCommitSha: text('applied_commit_sha'),
+    status: text('status').notNull().default('CREATED'),
+    errorMessage: text('error_message'),
+    ...timestamps,
+  },
+);
+
+export const patchValidations = pgTable(
+  'patch_validations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => patchWorkflows.id, { onDelete: 'cascade' }),
+    workspaceRunId: uuid('workspace_run_id').references(() => patchWorkspaceRuns.id, { onDelete: 'set null' }),
+    checkName: text('check_name').notNull(),
+    status: text('status').notNull(),
+    isMandatory: boolean('is_mandatory').notNull().default(true),
+    summary: text('summary').notNull(),
+    diagnosticsJson: jsonb('diagnostics_json'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('patch_validations_workflow_idx').on(t.workflowId, t.createdAt)],
+);
+
+export const patchReleases = pgTable(
+  'patch_releases',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => patchWorkflows.id, { onDelete: 'cascade' }),
+    releaseAuthorizationId: uuid('release_authorization_id')
+      .notNull()
+      .references(() => patchApprovals.id, { onDelete: 'cascade' }),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    repositoryUrl: text('repository_url').notNull(),
+    targetBranch: text('target_branch').notNull().default('main'),
+    remoteBaseSha: text('remote_base_sha').notNull(),
+    releaseCommitSha: text('release_commit_sha').notNull(),
+    pushType: text('push_type').notNull().default('FAST_FORWARD'),
+    deploymentMechanism: text('deployment_mechanism').notNull().default('VERCEL_GIT_INTEGRATION'),
+    deploymentId: text('deployment_id'),
+    deploymentSha: text('deployment_sha'),
+    status: text('status').notNull().default('RELEASED'),
+    releasedAt: timestamp('released_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+);
+
+export const patchRollbacks = pgTable(
+  'patch_rollbacks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => patchWorkflows.id, { onDelete: 'cascade' }),
+    targetReleaseId: uuid('target_release_id')
+      .notNull()
+      .references(() => patchReleases.id, { onDelete: 'cascade' }),
+    productionCommitSha: text('production_commit_sha').notNull(),
+    previousGoodCommitSha: text('previous_good_commit_sha').notNull(),
+    reason: text('reason').notNull(),
+    authorizationId: uuid('authorization_id')
+      .notNull()
+      .references(() => patchApprovals.id, { onDelete: 'cascade' }),
+    rollbackCommitSha: text('rollback_commit_sha'),
+    status: text('status').notNull().default('REQUESTED'),
+    ...timestamps,
+  },
+);
+
+export const patchWorkflowAuditEvents = pgTable(
+  'patch_workflow_audit_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => patchWorkflows.id, { onDelete: 'cascade' }),
+    eventType: text('event_type').notNull(),
+    actor: text('actor').notNull(),
+    oldState: text('old_state'),
+    newState: text('new_state'),
+    summary: text('summary').notNull(),
+    detailsJson: jsonb('details_json'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('patch_audit_workflow_idx').on(t.workflowId, t.createdAt)],
+);
+

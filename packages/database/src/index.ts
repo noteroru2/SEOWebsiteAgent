@@ -29,7 +29,11 @@ export function databaseForPool(pool: Pool) {
 }
 
 export function getDatabase() {
-  return (singleton ??= createDatabase());
+  const connectionString =
+    process.env.NODE_ENV === 'test' && process.env.TEST_DATABASE_URL
+      ? process.env.TEST_DATABASE_URL
+      : process.env.DATABASE_URL;
+  return (singleton ??= createDatabase(connectionString));
 }
 
 export async function createSite(input: unknown, database = getDatabase().db) {

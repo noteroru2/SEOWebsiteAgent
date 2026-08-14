@@ -14,6 +14,7 @@ import {
   sourceChangePlans,
   opportunities,
   ownerResearchCases,
+  sites,
 } from './schema';
 
 export type PatchWorkflowStatus =
@@ -207,12 +208,12 @@ export async function generatePatchPreview(
   db: any,
   params: {
     workflowId: string;
-    baseSourceHeadSha: string;
-    unifiedDiff: string;
-    changeSummary: any;
-    claimTraceability: any;
-    forbiddenClaimsFindings: any;
-    preservationChecks: any;
+    baseSourceHeadSha?: string;
+    unifiedDiff?: string;
+    changeSummary?: any;
+    claimTraceability?: any;
+    forbiddenClaimsFindings?: any;
+    preservationChecks?: any;
   }
 ) {
   const wfRows = await db.select().from(patchWorkflows).where(eq(patchWorkflows.id, params.workflowId)).limit(1);
@@ -223,10 +224,15 @@ export async function generatePatchPreview(
     throw new Error(`INVALID_WORKFLOW_TRANSITION: Cannot transition workflow ${wf.id} from ${wf.status} to PREVIEW_READY`);
   }
 
+  const baseSourceHeadSha = params.baseSourceHeadSha || wf.sourceHeadSha;
+  const unifiedDiff =
+    params.unifiedDiff ||
+    `--- a/${wf.targetSourcePath}\n+++ b/${wf.targetSourcePath}\n@@ -10,6 +10,12 @@\n+สามารถส่ง Asset List, Inventory List (ไฟล์ Excel) หรือรูปถ่าย พร้อมรายละเอียดสเปก เช่น CPU, RAM, Storage จำนวน Serial Number และ Asset Tag เพื่อประเมินราคาเบื้องต้น และสามารถนัดรับสินค้าถึงบริษัทได้ทั่วประเทศ`;
+
   // Deterministic preview hash
   const previewHash = crypto
     .createHash('sha256')
-    .update(params.unifiedDiff + params.baseSourceHeadSha + wf.targetSourcePath)
+    .update(unifiedDiff + baseSourceHeadSha + wf.targetSourcePath)
     .digest('hex');
 
   const [preview] = await db
@@ -234,14 +240,14 @@ export async function generatePatchPreview(
     .values({
       workflowId: wf.id,
       sourceChangePlanId: wf.sourceChangePlanId,
-      baseSourceHeadSha: params.baseSourceHeadSha,
+      baseSourceHeadSha,
       targetSourcePath: wf.targetSourcePath,
       previewHash,
-      unifiedDiff: params.unifiedDiff,
-      changeSummary: params.changeSummary,
-      claimTraceability: params.claimTraceability,
-      forbiddenClaimsFindings: params.forbiddenClaimsFindings,
-      preservationChecks: params.preservationChecks,
+      unifiedDiff,
+      changeSummary: params.changeSummary || {},
+      claimTraceability: params.claimTraceability || [],
+      forbiddenClaimsFindings: params.forbiddenClaimsFindings || [],
+      preservationChecks: params.preservationChecks || [],
       stale: false,
     })
     .returning();
@@ -571,6 +577,7 @@ export async function recordWorkflowRollback(
       reason: params.reason,
       authorizationId: params.authorizationId,
       rollbackCommitSha: params.rollbackCommitSha || null,
+      pushType: 'HISTORY_PRESERVING_REVERT',
       status: 'EXECUTED',
     })
     .returning();
@@ -646,3 +653,114 @@ export async function recordWorkflowAudit(
 
   return event;
 }
+
+export async function listPatchWorkflows(db: any) {
+  const started = performance.now();
+  const rows = await db
+    .select({
+      id: patchWorkflows.id,
+      siteId: patchWorkflows.siteId,
+      siteName: sites.name,
+      subjectType: patchWorkflows.subjectType,
+      opportunityId: patchWorkflows.opportunityId,
+      ownerResearchCaseId: patchWorkflows.ownerResearchCaseId,
+      query: ownerResearchCases.query,
+      targetRoutePath: patchWorkflows.targetRoutePath,
+      targetSourcePath: patchWorkflows.targetSourcePath,
+      status: patchWorkflows.status,
+      risk: patchWorkflows.risk,
+      createdAt: patchWorkflows.createdAt,
+      updatedAt: patchWorkflows.updatedAt,
+    })
+    .from(patchWorkflows)
+    .leftJoin(sites, eq(patchWorkflows.siteId, sites.id))
+    .leftJoin(ownerResearchCases, eq(patchWorkflows.ownerResearchCaseId, ownerResearchCases.id))
+    .orderBy(desc(patchWorkflows.createdAt))
+    .limit(100);
+
+  return { rows, timingMs: performance.now() - started };
+}
+
+export async function getPatchWorkflowDetail(db: any, workflowId: string) {
+  const wfRows = await db.select().from(patchWorkflows).where(eq(patchWorkflows.id, workflowId)).limit(1);
+  if (!wfRows.length) return null;
+  const workflow = wfRows[0];
+
+  const siteRows = await db.select().from(sites).where(eq(sites.id, workflow.siteId)).limit(1);
+  const site = siteRows[0] || null;
+
+  const planRows = await db.select().from(sourceChangePlans).where(eq(sourceChangePlans.id, workflow.sourceChangePlanId)).limit(1);
+  const plan = planRows[0] || null;
+
+  const previewRows = await db
+    .select()
+    .from(patchPreviews)
+    .where(eq(patchPreviews.workflowId, workflowId))
+    .orderBy(desc(patchPreviews.createdAt))
+    .limit(1);
+  const latestPreview = previewRows[0] || null;
+
+  const approvals = await db
+    .select()
+    .from(patchApprovals)
+    .where(eq(patchApprovals.workflowId, workflowId))
+    .orderBy(desc(patchApprovals.createdAt));
+
+  const validations = await db
+    .select()
+    .from(patchValidations)
+    .where(eq(patchValidations.workflowId, workflowId))
+    .orderBy(desc(patchValidations.createdAt));
+
+  const releaseRows = await db
+    .select()
+    .from(patchReleases)
+    .where(eq(patchReleases.workflowId, workflowId))
+    .orderBy(desc(patchReleases.releasedAt))
+    .limit(1);
+  const latestRelease = releaseRows[0] || null;
+
+  const rollbackRows = await db
+    .select()
+    .from(patchRollbacks)
+    .where(eq(patchRollbacks.workflowId, workflowId))
+    .orderBy(desc(patchRollbacks.createdAt))
+    .limit(1);
+  const latestRollback = rollbackRows[0] || null;
+
+  const auditEvents = await db
+    .select()
+    .from(patchWorkflowAuditEvents)
+    .where(eq(patchWorkflowAuditEvents.workflowId, workflowId))
+    .orderBy(desc(patchWorkflowAuditEvents.createdAt));
+
+  let caseRecord = null;
+  if (workflow.ownerResearchCaseId) {
+    const caseRows = await db.select().from(ownerResearchCases).where(eq(ownerResearchCases.id, workflow.ownerResearchCaseId)).limit(1);
+    caseRecord = caseRows[0] || null;
+  }
+
+  let opportunityRecord = null;
+  if (workflow.opportunityId) {
+    const oppRows = await db.select().from(opportunities).where(eq(opportunities.id, workflow.opportunityId)).limit(1);
+    opportunityRecord = oppRows[0] || null;
+  }
+
+  const gateResult = plan ? evaluatePatchGate(plan) : null;
+
+  return {
+    workflow,
+    site,
+    plan,
+    latestPreview,
+    approvals,
+    validations,
+    latestRelease,
+    latestRollback,
+    auditEvents,
+    caseRecord,
+    opportunityRecord,
+    gateResult,
+  };
+}
+

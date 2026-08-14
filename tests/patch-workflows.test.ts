@@ -174,7 +174,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
     const [oppPlan] = await db
       .insert(sourceChangePlans)
       .values({
-        runId: oppRun.id,
+        runId: oppRun!.id,
         siteId: testSite.id,
         opportunityId: testOpportunity.id,
         subjectType: 'OPPORTUNITY',
@@ -191,7 +191,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
       siteId: testSite.id,
       subjectType: 'OPPORTUNITY',
       opportunityId: testOpportunity.id,
-      sourceChangePlanId: oppPlan.id,
+      sourceChangePlanId: oppPlan!.id,
       sourceHeadSha: '063e159127f3d4a5445fd55aff08e66710b37ef5',
       targetRoutePath: '/บริการ/รับซื้อคอมบริษัท',
       targetSourcePath: 'src/content/services/รับซื้อคอมบริษัท.md',
@@ -255,7 +255,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
     const [noChangePlan] = await db
       .insert(sourceChangePlans)
       .values({
-        runId: noChangeRun.id,
+        runId: noChangeRun!.id,
         siteId: testSite.id,
         ownerResearchCaseId: testCase.id,
         subjectType: 'OWNER_RESEARCH_CASE',
@@ -273,7 +273,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
         siteId: testSite.id,
         subjectType: 'OWNER_RESEARCH_CASE',
         ownerResearchCaseId: testCase.id,
-        sourceChangePlanId: noChangePlan.id,
+        sourceChangePlanId: noChangePlan!.id,
         sourceHeadSha: '063e159127f3d4a5445fd55aff08e66710b37ef5',
         targetRoutePath: '/บริการ/รับซื้อคอมบริษัท',
         targetSourcePath: 'src/content/services/รับซื้อคอมบริษัท.md',
@@ -302,7 +302,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
     const [stalePlan] = await db
       .insert(sourceChangePlans)
       .values({
-        runId: staleRun.id,
+        runId: staleRun!.id,
         siteId: testSite.id,
         ownerResearchCaseId: testCase.id,
         subjectType: 'OWNER_RESEARCH_CASE',
@@ -321,7 +321,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
         siteId: testSite.id,
         subjectType: 'OWNER_RESEARCH_CASE',
         ownerResearchCaseId: testCase.id,
-        sourceChangePlanId: stalePlan.id,
+        sourceChangePlanId: stalePlan!.id,
         sourceHeadSha: '063e159127f3d4a5445fd55aff08e66710b37ef5',
         targetRoutePath: '/บริการ/รับซื้อคอมบริษัท',
         targetSourcePath: 'src/content/services/รับซื้อคอมบริษัท.md',
@@ -371,7 +371,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
 
     // Fetch workflow from DB to confirm status updated to PREVIEW_READY
     const [updatedWf] = await db.select().from(patchWorkflows).where(eq(patchWorkflows.id, wf.id));
-    expect(updatedWf.status).toBe('PREVIEW_READY');
+    expect(updatedWf!.status).toBe('PREVIEW_READY');
   });
 
   it('11 & 12. Approval is tied to EXACT preview identity; mismatch fails', async () => {
@@ -420,7 +420,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
     expect(approval.decision).toBe('APPROVED');
 
     const [updatedWf] = await db.select().from(patchWorkflows).where(eq(patchWorkflows.id, wf.id));
-    expect(updatedWf.status).toBe('APPROVED_FOR_VALIDATION');
+    expect(updatedWf!.status).toBe('APPROVED_FOR_VALIDATION');
   });
 
   it('13. Rejection prevents patch execution', async () => {
@@ -455,7 +455,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
     });
 
     const [updatedWf] = await db.select().from(patchWorkflows).where(eq(patchWorkflows.id, wf.id));
-    expect(updatedWf.status).toBe('REJECTED');
+    expect(updatedWf!.status).toBe('REJECTED');
   });
 
   it('17 & 18. Mandatory validation failure blocks RELEASE_READY; BLOCKED is NOT PASS', async () => {
@@ -500,7 +500,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
     expect(result.finalStatus).toBe('VALIDATION_FAILED');
 
     const [updatedWf] = await db.select().from(patchWorkflows).where(eq(patchWorkflows.id, wf.id));
-    expect(updatedWf.status).toBe('VALIDATION_FAILED');
+    expect(updatedWf!.status).toBe('VALIDATION_FAILED');
   });
 
   it('22 & 23. RELEASE_READY does NOT equal RELEASE_AUTHORIZED; patch approval does NOT authorize release', async () => {
@@ -570,7 +570,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
     expect(releaseAuth.approvalType).toBe('RELEASE_AUTHORIZATION');
 
     const [authedWf] = await db.select().from(patchWorkflows).where(eq(patchWorkflows.id, wf.id));
-    expect(authedWf.status).toBe('RELEASE_AUTHORIZED');
+    expect(authedWf!.status).toBe('RELEASE_AUTHORIZED');
   });
 
   it('26. Force push is strictly PROHIBITED', async () => {
@@ -714,7 +714,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
     expect(rollback.status).toBe('EXECUTED');
 
     const [rolledWf] = await db.select().from(patchWorkflows).where(eq(patchWorkflows.id, wf.id));
-    expect(rolledWf.status).toBe('ROLLED_BACK');
+    expect(rolledWf!.status).toBe('ROLLED_BACK');
   });
 
   it('31. Immutable audit trail created for every transition', async () => {
@@ -734,7 +734,7 @@ describe('Batch 8 — Productized Batch 7 Patch Workflows', () => {
       .where(eq(patchWorkflowAuditEvents.workflowId, wf.id));
 
     expect(auditEvents.length).toBeGreaterThan(0);
-    expect(auditEvents[0].eventType).toBe('WORKFLOW_CREATED');
+    expect(auditEvents[0]!.eventType).toBe('WORKFLOW_CREATED');
   });
 
   it('Phase 22 Reference Case Replay: Company computer case workflow replay', async () => {

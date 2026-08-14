@@ -1812,11 +1812,17 @@ describe('transactional free quota and evidence integration', () => {
     ).toBe('RESOLVED');
     expect(
       (
-        await database.pool.query(`SELECT source_type FROM evidence_items WHERE request_id=$1`, [
-          requestId,
-        ])
-      ).rows[0].source_type,
-    ).toBe('OWNER_CONFIRMED_SERP_API_CAPTURE');
+        await database.pool.query(
+          `SELECT source_type,evidence->>'provenance' provenance,evidence->>'reviewStatus' review_status
+           FROM evidence_items WHERE request_id=$1`,
+          [requestId],
+        )
+      ).rows[0],
+    ).toEqual({
+      source_type: 'SERP_API_CAPTURED',
+      provenance: 'SERP_API_CAPTURED',
+      review_status: 'OWNER_ACCEPTED',
+    });
   });
 
   it('keeps a partial normal-query capture pending and compatible when owner rank is beyond observed depth', async () => {

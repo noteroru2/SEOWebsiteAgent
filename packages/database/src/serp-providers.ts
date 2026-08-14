@@ -591,7 +591,7 @@ export async function persistSerpApiSuccess(
       await recordEvidenceItem(
         String(capture.request_id),
         'SERP_API_CAPTURED',
-        evidence,
+        { ...evidence, reviewStatus: 'POLICY_ACCEPTED' },
         new Date(result.capturedAt),
         client as unknown as Pool,
         'UTC',
@@ -697,10 +697,11 @@ export async function acceptSerpApiCapture(captureId: string, pool: Pool = getDa
     const result = capture.normalized_result as NormalizedSerpResult;
     await recordEvidenceItem(
       String(capture.request_id),
-      'OWNER_CONFIRMED_SERP_API_CAPTURE',
+      'SERP_API_CAPTURED',
       {
         ...result,
-        provenance: 'OWNER_CONFIRMED_SERP_API_CAPTURE',
+        provenance: 'SERP_API_CAPTURED',
+        reviewStatus: 'OWNER_ACCEPTED',
         evidenceQuality:
           result.requestedVerifiedPrecision === 'CITY'
             ? 'SERP_API_VERIFIED_CITY_REQUEST'

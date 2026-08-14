@@ -10,7 +10,9 @@ Evidence Automation V1 adds two zero-AI owner workflows without changing the exp
 
 ## Reusable owner facts
 
-New facts are created only from structured owner confirmation. Historical free-text evidence is preserved and is not interpreted or backfilled. Each fact stores a deterministic key, structured scope, value, status, review date, hash, and the original `OWNER_CONFIRMED_DIRECT` evidence item. Reuse is allowed only when every required fact has one or more equivalent active values, the exact configured scope matches, no conflict exists, review dates remain current, and original owner provenance is intact. The resolved request stores `OWNER_CONFIRMED_REUSED` references to the original facts and evidence items.
+New facts are created only from structured owner confirmation. Historical free-text evidence is preserved and is not interpreted or backfilled. Each fact stores a deterministic key, structured scope, value, status, review date, hash, and exactly one originating provenance source. Existing opportunity-linked facts retain their evidence-item source. Opportunity-independent facts use a dedicated immutable `OWNER_CONFIRMED_DIRECT` confirmation record and can be registered before any opportunity or evidence request exists. Reconfirmation is idempotent at the fact level while retaining a separate confirmation audit record; contradictory active values are preserved as conflicts rather than overwritten.
+
+Reuse is allowed only when every required fact has an equivalent active canonical value, the exact configured scope matches, no conflict exists, review dates remain current, and owner provenance remains intact. The resolved request stores `OWNER_CONFIRMED_REUSED` references to the reusable facts. Direct confirmation does not create an opportunity, evidence request, job, AI usage, or provider call.
 
 Review intervals are configured with the maintained fact definitions. Expired, superseded, wrong-scope, missing, and conflicting facts do not resolve a request.
 

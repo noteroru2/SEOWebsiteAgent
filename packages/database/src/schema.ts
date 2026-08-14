@@ -9,6 +9,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -761,6 +762,24 @@ export const evidenceItems = pgTable(
   (t) => [index('evidence_item_request_idx').on(t.requestId, t.createdAt)],
 );
 
+export const ownerFactConfirmations = pgTable(
+  'owner_fact_confirmations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    provenance: text('provenance').notNull(),
+    confirmedBy: text('confirmed_by').notNull(),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }).notNull().defaultNow(),
+    reviewStatus: text('review_status').notNull(),
+    sourceContext: text('source_context'),
+    metadata: jsonb('metadata').notNull().default({}),
+    ...timestamps,
+  },
+  (t) => [index('owner_fact_confirmations_site_idx').on(t.siteId, t.confirmedAt)],
+);
+
 export const ownerFacts = pgTable(
   'owner_facts',
   {
@@ -775,9 +794,13 @@ export const ownerFacts = pgTable(
     status: text('status').notNull().default('ACTIVE'),
     confirmedAt: timestamp('confirmed_at', { withTimezone: true }).notNull().defaultNow(),
     reviewAfter: timestamp('review_after', { withTimezone: true }),
-    sourceEvidenceItemId: uuid('source_evidence_item_id')
-      .notNull()
-      .references(() => evidenceItems.id, { onDelete: 'restrict' }),
+    sourceEvidenceItemId: uuid('source_evidence_item_id').references(() => evidenceItems.id, {
+      onDelete: 'restrict',
+    }),
+    directConfirmationId: uuid('direct_confirmation_id').references(
+      () => ownerFactConfirmations.id,
+      { onDelete: 'restrict' },
+    ),
     confirmedBy: text('confirmed_by').notNull().default('OWNER'),
     supersededAt: timestamp('superseded_at', { withTimezone: true }),
     supersededBy: uuid('superseded_by'),
@@ -788,6 +811,23 @@ export const ownerFacts = pgTable(
   (t) => [
     index('owner_facts_site_scope_idx').on(t.siteId, t.factKey, t.scopeType, t.scopeKey),
     uniqueIndex('owner_facts_hash_unique_idx').on(t.factHash),
+  ],
+);
+
+export const ownerFactConfirmationLinks = pgTable(
+  'owner_fact_confirmation_links',
+  {
+    factId: uuid('fact_id')
+      .notNull()
+      .references(() => ownerFacts.id, { onDelete: 'cascade' }),
+    confirmationId: uuid('confirmation_id')
+      .notNull()
+      .references(() => ownerFactConfirmations.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.factId, t.confirmationId] }),
+    index('owner_fact_confirmation_links_confirmation_idx').on(t.confirmationId),
   ],
 );
 

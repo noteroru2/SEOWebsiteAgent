@@ -169,6 +169,7 @@ export type OwnerFactRequirement = {
   scopeType: (typeof ownerFactScopeTypes)[number];
   scopeKey: string;
   reviewDays: number;
+  expectedValue?: unknown;
 };
 
 const notebookFacts: OwnerFactRequirement[] = [
@@ -216,8 +217,301 @@ const notebookFacts: OwnerFactRequirement[] = [
   },
 ];
 
+const companyComputerScope = {
+  service: 'company-computer',
+  productCategory: 'company-computer-equipment',
+  nationwide: 'company-computer|thailand',
+} as const;
+
+const acceptedDeviceTypes = ['DESKTOP_PC', 'MINI_PC', 'WORKSTATION', 'NOTEBOOK'] as const;
+const valuationInputs = [
+  'PHOTOS',
+  'SPECIFICATIONS',
+  'QUANTITY',
+  'SERIAL_NUMBERS',
+  'ASSET_TAGS',
+  'EXCEL_OR_INVENTORY_LIST',
+] as const;
+
+export const companyComputerOwnerFactValues = [
+  {
+    factKey: 'service.accepted_device_types',
+    label: 'Accepted company-computer device types',
+    scopeType: 'PRODUCT_CATEGORY',
+    scopeKey: companyComputerScope.productCategory,
+    value: [...acceptedDeviceTypes],
+    reviewDays: 180,
+  },
+  {
+    factKey: 'service.accepts_defective_devices',
+    label: 'Defective or non-working company computers may be accepted',
+    scopeType: 'PRODUCT_CATEGORY',
+    scopeKey: companyComputerScope.productCategory,
+    value: true,
+    reviewDays: 180,
+  },
+  {
+    factKey: 'service.accepts_multi_unit_lots',
+    label: 'Mixed and multi-unit computer lots may be accepted',
+    scopeType: 'PRODUCT_CATEGORY',
+    scopeKey: companyComputerScope.productCategory,
+    value: true,
+    reviewDays: 180,
+  },
+  {
+    factKey: 'service.pickup_nationwide',
+    label: 'Company pickup is available nationwide in Thailand',
+    scopeType: 'SERVICE_GEOGRAPHY',
+    scopeKey: companyComputerScope.nationwide,
+    value: true,
+    reviewDays: 180,
+  },
+  {
+    factKey: 'service.valuation_inputs_supported',
+    label: 'Supported preliminary valuation inputs',
+    scopeType: 'SERVICE',
+    scopeKey: companyComputerScope.service,
+    value: [...valuationInputs],
+    reviewDays: 180,
+  },
+  {
+    factKey: 'service.preliminary_valuation_available',
+    label: 'Preliminary valuation is available',
+    scopeType: 'SERVICE',
+    scopeKey: companyComputerScope.service,
+    value: true,
+    reviewDays: 180,
+  },
+  {
+    factKey: 'service.quotation_available',
+    label: 'A quotation can be provided before the transaction',
+    scopeType: 'SERVICE',
+    scopeKey: companyComputerScope.service,
+    value: true,
+    reviewDays: 180,
+  },
+  {
+    factKey: 'service.final_price_after_inspection',
+    label: 'Final price is confirmed after inspection',
+    scopeType: 'SERVICE',
+    scopeKey: companyComputerScope.service,
+    value: true,
+    reviewDays: 180,
+  },
+  {
+    factKey: 'service.purchase_transaction_document_available',
+    label: 'Purchase-related transaction documentation is available',
+    scopeType: 'SERVICE',
+    scopeKey: companyComputerScope.service,
+    value: true,
+    reviewDays: 180,
+  },
+  {
+    factKey: 'service.seller_receipt_expected',
+    label: 'The selling company is expected to issue a receipt for payment received',
+    scopeType: 'SERVICE',
+    scopeKey: companyComputerScope.service,
+    value: true,
+    reviewDays: 180,
+  },
+  {
+    factKey: 'service.data_removal_available',
+    label: 'Data removal or destruction can be provided',
+    scopeType: 'SERVICE',
+    scopeKey: companyComputerScope.service,
+    value: true,
+    reviewDays: 180,
+  },
+  {
+    factKey: 'service.payment_cash_available',
+    label: 'Cash payment is available',
+    scopeType: 'SERVICE',
+    scopeKey: companyComputerScope.service,
+    value: true,
+    reviewDays: 180,
+  },
+  {
+    factKey: 'service.payment_bank_transfer_available',
+    label: 'Bank-transfer payment is available',
+    scopeType: 'SERVICE',
+    scopeKey: companyComputerScope.service,
+    value: true,
+    reviewDays: 180,
+  },
+] as const satisfies ReadonlyArray<OwnerFactRequirement & { value: unknown }>;
+
+export type DirectOwnerFactKey = (typeof companyComputerOwnerFactValues)[number]['factKey'];
+
+const directOwnerFactDefinitions = new Map(
+  companyComputerOwnerFactValues.map((item) => [item.factKey, item]),
+);
+
+function canonicalDirectFactValue(
+  definition: (typeof companyComputerOwnerFactValues)[number],
+  value: unknown,
+) {
+  if (Array.isArray(definition.value)) {
+    if (!Array.isArray(value) || value.some((item) => typeof item !== 'string'))
+      throw new Error('Canonical owner fact value must be a string array');
+    const allowed = new Set(definition.value as readonly string[]);
+    if (!value.length || value.some((item) => !allowed.has(item)))
+      throw new Error('Owner fact value contains an unsupported canonical value');
+    return [...new Set(value)].sort(
+      (a, b) =>
+        (definition.value as readonly string[]).indexOf(a) -
+        (definition.value as readonly string[]).indexOf(b),
+    );
+  }
+  if (typeof value !== 'boolean') throw new Error('Canonical owner fact value must be boolean');
+  return value;
+}
+
+const canonicalJson = (value: unknown) => JSON.stringify(value);
+
+export type DirectOwnerFactInput = {
+  siteId: string;
+  factKey: DirectOwnerFactKey;
+  value: unknown;
+  scopeType: (typeof ownerFactScopeTypes)[number];
+  scopeKey: string;
+  provenance: 'OWNER_CONFIRMED_DIRECT';
+  reviewStatus: 'OWNER_CONFIRMED';
+  confirmedBy: string;
+  sourceContext?: string;
+  ownerAuthorized: true;
+};
+
+export async function confirmDirectOwnerFact(
+  input: DirectOwnerFactInput,
+  pool: Pool = getDatabase().pool,
+) {
+  if (input.ownerAuthorized !== true) throw new Error('Explicit owner authorization is required');
+  if (input.provenance !== 'OWNER_CONFIRMED_DIRECT')
+    throw new Error('Direct owner confirmation provenance is required');
+  if (input.reviewStatus !== 'OWNER_CONFIRMED')
+    throw new Error('Direct owner confirmation review is required');
+  const confirmedBy = input.confirmedBy.trim();
+  if (!confirmedBy || confirmedBy.length > 100)
+    throw new Error('Valid confirmer identity is required');
+  const sourceContext = input.sourceContext?.trim() || null;
+  if (sourceContext && sourceContext.length > 200) throw new Error('Source context is too long');
+  const definition = directOwnerFactDefinitions.get(input.factKey);
+  if (!definition) throw new Error('Unsupported canonical owner fact key');
+  if (input.scopeType !== definition.scopeType || input.scopeKey !== definition.scopeKey)
+    throw new Error('Owner fact scope does not match its canonical definition');
+  const value = canonicalDirectFactValue(definition, input.value);
+  const logicalHash = evidenceHash({
+    registryVersion: 2,
+    siteId: input.siteId,
+    factKey: definition.factKey,
+    value,
+    scopeType: definition.scopeType,
+    scopeKey: definition.scopeKey,
+  });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const site = await client.query(`SELECT id FROM sites WHERE id=$1 FOR SHARE`, [input.siteId]);
+    if (!site.rows[0]) throw new Error('Site not found');
+    const confirmation = (
+      await client.query(
+        `INSERT INTO owner_fact_confirmations(site_id,provenance,confirmed_by,review_status,
+          source_context,metadata) VALUES($1,$2,$3,$4,$5,$6::jsonb) RETURNING *`,
+        [
+          input.siteId,
+          input.provenance,
+          confirmedBy,
+          input.reviewStatus,
+          sourceContext,
+          JSON.stringify({ registryVersion: 2 }),
+        ],
+      )
+    ).rows[0];
+    const equivalent = await client.query(
+      `SELECT * FROM owner_facts WHERE site_id=$1 AND fact_key=$2 AND scope_type=$3
+        AND scope_key=$4 AND value_json=$5::jsonb ORDER BY confirmed_at DESC,id DESC LIMIT 1 FOR UPDATE`,
+      [
+        input.siteId,
+        definition.factKey,
+        definition.scopeType,
+        definition.scopeKey,
+        canonicalJson(value),
+      ],
+    );
+    let fact = equivalent.rows[0];
+    let created = false;
+    let requiresReview = fact?.status === 'SUPERSEDED';
+    if (!fact) {
+      const inserted = await client.query(
+        `INSERT INTO owner_facts(site_id,fact_key,value_json,scope_type,scope_key,status,review_after,
+          direct_confirmation_id,confirmed_by,fact_hash,metadata)
+         VALUES($1,$2,$3::jsonb,$4,$5,'ACTIVE',now()+($6::int*interval '1 day'),$7,$8,$9,$10::jsonb)
+         ON CONFLICT(fact_hash) DO NOTHING RETURNING *`,
+        [
+          input.siteId,
+          definition.factKey,
+          canonicalJson(value),
+          definition.scopeType,
+          definition.scopeKey,
+          definition.reviewDays,
+          confirmation.id,
+          confirmedBy,
+          logicalHash,
+          JSON.stringify({ registryVersion: 2, reviewDays: definition.reviewDays }),
+        ],
+      );
+      fact = inserted.rows[0];
+      created = Boolean(fact);
+      if (!fact)
+        fact = (
+          await client.query(`SELECT * FROM owner_facts WHERE fact_hash=$1 FOR UPDATE`, [
+            logicalHash,
+          ])
+        ).rows[0];
+    } else if (fact.status === 'ACTIVE' || fact.status === 'EXPIRED') {
+      fact = (
+        await client.query(
+          `UPDATE owner_facts SET status='ACTIVE',confirmed_at=now(),review_after=now()+($2::int*interval '1 day'),
+            confirmed_by=$3,updated_at=now() WHERE id=$1 RETURNING *`,
+          [fact.id, definition.reviewDays, confirmedBy],
+        )
+      ).rows[0];
+      requiresReview = false;
+    }
+    if (!fact) throw new Error('Owner fact identity could not be resolved');
+    await client.query(
+      `INSERT INTO owner_fact_confirmation_links(fact_id,confirmation_id) VALUES($1,$2)
+       ON CONFLICT DO NOTHING`,
+      [fact.id, confirmation.id],
+    );
+    const conflicts = await client.query(
+      `SELECT id,value_json FROM owner_facts WHERE site_id=$1 AND fact_key=$2 AND scope_type=$3
+        AND scope_key=$4 AND status='ACTIVE' AND (review_after IS NULL OR review_after>now())
+        ORDER BY confirmed_at DESC,id DESC`,
+      [input.siteId, definition.factKey, definition.scopeType, definition.scopeKey],
+    );
+    const conflict = new Set(conflicts.rows.map((row) => canonicalJson(row.value_json))).size > 1;
+    await client.query('COMMIT');
+    return { fact, confirmation, created, reused: !created, conflict, requiresReview };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export function requiredOwnerFacts(input: { query?: string | null }): OwnerFactRequirement[] {
   const query = String(input.query ?? '').toLocaleLowerCase('th');
+  if (query.includes('รับซื้อคอมบริษัท') || query.includes('คอมบริษัท'))
+    return companyComputerOwnerFactValues.map((item) => ({
+      factKey: item.factKey,
+      label: item.label,
+      scopeType: item.scopeType,
+      scopeKey: item.scopeKey,
+      reviewDays: item.reviewDays,
+      expectedValue: item.value,
+    }));
   if (query.includes('โน๊ตบุ๊ค') || query.includes('โน้ตบุ๊ก')) return notebookFacts;
   return [];
 }
@@ -244,7 +538,14 @@ export function classifyOwnerFactCandidates(
       (fact.review_after && new Date(String(fact.review_after)).getTime() <= now),
   );
   const conflict = new Set(active.map((fact) => JSON.stringify(fact.value_json))).size > 1;
-  const match = !conflict && active.length > 0 ? active[0] : null;
+  const match =
+    !conflict && active.length > 0
+      ? (active.find(
+          (fact) =>
+            requirement.expectedValue === undefined ||
+            canonicalJson(fact.value_json) === canonicalJson(requirement.expectedValue),
+        ) ?? null)
+      : null;
   return { requirement, match, conflict, expired, candidates: scoped };
 }
 
@@ -313,9 +614,10 @@ export async function confirmReusableOwnerFact(
     );
     if (!requirement)
       throw new Error('Fact is not deterministically required for this opportunity');
+    const value = requirement.expectedValue ?? true;
     const directEvidence = {
       factKey: requirement.factKey,
-      value: true,
+      value,
       scopeType: requirement.scopeType,
       scopeKey: requirement.scopeKey,
       provenance: 'OWNER_CONFIRMED_DIRECT',
@@ -332,7 +634,7 @@ export async function confirmReusableOwnerFact(
     const hash = factIdentity({
       siteId: String(request.rows[0].site_id),
       factKey: requirement.factKey,
-      value: true,
+      value,
       scopeType: requirement.scopeType,
       scopeKey: requirement.scopeKey,
       sourceEvidenceItemId: String(evidenceItem.id),
@@ -345,7 +647,7 @@ export async function confirmReusableOwnerFact(
       [
         request.rows[0].site_id,
         requirement.factKey,
-        JSON.stringify(true),
+        JSON.stringify(value),
         requirement.scopeType,
         requirement.scopeKey,
         requirement.reviewDays,

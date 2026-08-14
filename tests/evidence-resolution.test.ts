@@ -5,6 +5,7 @@ import {
   createSite,
   buildGscComparison,
   correctOwnerEvidenceTimestamp,
+  composeEvidenceItems,
   currentEvidenceV3,
   deterministicEvidencePacket,
   ensureEvidenceRequest,
@@ -285,6 +286,186 @@ describe('Batch 6.4 deterministic evidence resolution', () => {
     ).toBe('RESOLVED');
     expect((await database.pool.query(`SELECT count(*)::int n FROM ai_usage`)).rows[0].n).toBe(0);
     expect((await database.pool.query(`SELECT count(*)::int n FROM jobs`)).rows[0].n).toBe(0);
+  });
+  it('preserves complementary owner and API observations for one resolved request', async () => {
+    const request = await ensureEvidenceRequest(
+      {
+        opportunityId,
+        type: 'MANUAL_SERP_OBSERVATION',
+        requirement: 'Owner and API comparison',
+        reason: 'Complementary observations',
+        source: 'OWNER_AND_SERP_API',
+      },
+      database.pool,
+    );
+    await storeOwnerEvidence(
+      {
+        requestId: request.id,
+        sourceType: 'OWNER_OBSERVED_SERP',
+        evidence: {
+          query: 'fixture',
+          device: 'DESKTOP',
+          approximatePosition: 24,
+          rankingUrl: 'https://evidence.example/ram',
+        },
+        observedAt: new Date('2026-08-12T08:59:00Z'),
+        observedTimezone: 'Asia/Bangkok',
+      },
+      database.pool,
+    );
+    const before = await deterministicEvidencePacket(opportunityId, database.pool);
+    const apiEvidence = {
+      query: 'fixture',
+      device: 'DESKTOP',
+      provider: 'SERPAPI',
+      provenance: 'SERP_API_CAPTURED',
+      reviewStatus: 'OWNER_ACCEPTED',
+      coverageStatus: 'PARTIAL',
+      maximumObservedOrganicPosition: 8,
+      rankLowerBoundExclusive: 8,
+      ownerComparison: 'COMPATIBLE_WITH_OWNER_OBSERVATION',
+      conflict: null,
+    };
+    const api = await recordEvidenceItem(
+      request.id,
+      'SERP_API_CAPTURED',
+      apiEvidence,
+      new Date('2026-08-13T16:45:24Z'),
+      database.pool,
+      'UTC',
+    );
+    const duplicate = await recordEvidenceItem(
+      request.id,
+      'SERP_API_CAPTURED',
+      apiEvidence,
+      new Date('2026-08-13T16:45:24Z'),
+      database.pool,
+      'UTC',
+    );
+    expect(duplicate.id).toBe(api.id);
+    const after = await deterministicEvidencePacket(opportunityId, database.pool);
+    expect(after.evidencePacketHash).not.toBe(before.evidencePacketHash);
+    expect(
+      (await deterministicEvidencePacket(opportunityId, database.pool)).evidencePacketHash,
+    ).toBe(after.evidencePacketHash);
+    expect(after.packet.manualSerpObservation).toHaveLength(2);
+    expect(after.packet.manualSerpObservation.map((item) => item.sourceType)).toEqual([
+      'OWNER_OBSERVED_SERP',
+      'SERP_API_CAPTURED',
+    ]);
+    const normalized = buildV3EvidenceContext(after.packet) as {
+      manualSerpObservation: Array<Record<string, unknown>>;
+    };
+    expect(normalized.manualSerpObservation).toEqual([
+      expect.objectContaining({
+        provenance_code: 'OWNER_MANUAL_SERP',
+        approximatePosition: 24,
+      }),
+      expect.objectContaining({
+        provenance_code: 'SERP_API_CAPTURED',
+        review_status: 'OWNER_ACCEPTED',
+        maximumObservedOrganicPosition: 8,
+      }),
+    ]);
+    expect(
+      (await database.pool.query(`SELECT status FROM evidence_requests WHERE id=$1`, [request.id]))
+        .rows[0].status,
+    ).toBe('RESOLVED');
+  });
+  it('orders, bounds, deduplicates, and excludes explicitly invalid evidence deterministically', () => {
+    const item = (
+      id: string,
+      evidenceHash: string,
+      observedAt: string,
+      evidence: Record<string, unknown>,
+    ) => ({
+      id,
+      sourceType: String(evidence.provenance ?? 'OWNER_OBSERVED_SERP'),
+      evidence,
+      evidenceHash,
+      observedAt,
+      observedTimezone: 'UTC',
+      createdAt: observedAt,
+    });
+    const ownerDesktop = item('b', 'owner-desktop', '2026-08-12T08:59:00Z', {
+      provenance: 'OWNER_OBSERVED_SERP',
+      device: 'DESKTOP',
+    });
+    const ownerMobile = item('c', 'owner-mobile', '2026-08-12T09:00:00Z', {
+      provenance: 'OWNER_OBSERVED_SERP',
+      device: 'MOBILE',
+    });
+    const api = item('d', 'api', '2026-08-13T16:45:24Z', {
+      provenance: 'SERP_API_CAPTURED',
+      device: 'DESKTOP',
+    });
+    const duplicateApi = { ...api, id: 'e' };
+    const rejected = item('f', 'rejected', '2026-08-14T00:00:00Z', {
+      provenance: 'SERP_API_CAPTURED',
+      status: 'REJECTED',
+    });
+    const superseded = item('g', 'superseded', '2026-08-15T00:00:00Z', {
+      provenance: 'OWNER_OBSERVED_SERP',
+      supersededBy: 'replacement',
+    });
+    const forward = composeEvidenceItems([
+      api,
+      superseded,
+      ownerMobile,
+      duplicateApi,
+      rejected,
+      ownerDesktop,
+    ]);
+    const reverse = composeEvidenceItems(
+      [api, superseded, ownerMobile, duplicateApi, rejected, ownerDesktop].reverse(),
+    );
+    expect(forward.map((entry) => entry.evidenceHash)).toEqual([
+      'owner-desktop',
+      'owner-mobile',
+      'api',
+    ]);
+    expect(reverse.map((entry) => entry.evidenceHash)).toEqual(
+      forward.map((entry) => entry.evidenceHash),
+    );
+    expect(
+      composeEvidenceItems([ownerDesktop, ownerMobile, api], 2).map((entry) => entry.id),
+    ).toEqual(['c', 'd']);
+  });
+  it('treats source provenance as part of persisted evidence identity', async () => {
+    const request = await ensureEvidenceRequest(
+      {
+        opportunityId,
+        type: 'MANUAL_SERP_OBSERVATION',
+        requirement: 'Distinct provenance',
+        reason: 'Distinct provenance',
+        source: 'MULTI_SOURCE',
+      },
+      database.pool,
+    );
+    const evidence = { query: 'fixture', device: 'DESKTOP', result: 'same value' };
+    const owner = await recordEvidenceItem(
+      request.id,
+      'OWNER_OBSERVED_SERP',
+      evidence,
+      undefined,
+      database.pool,
+    );
+    const emulated = await recordEvidenceItem(
+      request.id,
+      'PLAYWRIGHT_EMULATED',
+      evidence,
+      undefined,
+      database.pool,
+    );
+    expect(owner.evidence_hash).not.toBe(emulated.evidence_hash);
+    expect(
+      (
+        await database.pool.query(
+          `SELECT count(*)::int n FROM evidence_items WHERE request_id=$1`,
+          [request.id],
+        )
+      ).rows[0].n,
+    ).toBe(2);
   });
   it('hashes the actual observation instant and explicit timezone', async () => {
     const request = await ensureEvidenceRequest(

@@ -21,6 +21,18 @@ export const evidenceRequestTypes = [
 export type EvidenceRequestType = (typeof evidenceRequestTypes)[number];
 export type EvidenceCompleteness =
   'INCOMPLETE' | 'INTERNALLY_RESOLVED' | 'OWNER_INPUT_REQUIRED' | 'READY_FOR_REEVALUATION';
+export const EVIDENCE_PACKET_VERSION = 'evidence-packet-v2-multi-item';
+export const MAX_EVIDENCE_ITEMS_PER_REQUEST = 16;
+
+export interface ComposableEvidenceItem {
+  id: string;
+  sourceType: string;
+  evidence: Record<string, unknown>;
+  evidenceHash: string;
+  observedAt: string | Date | null;
+  observedTimezone: string | null;
+  createdAt: string | Date;
+}
 
 function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
@@ -34,6 +46,52 @@ function stable(value: unknown): string {
 }
 export function evidenceHash(value: unknown) {
   return createHash('sha256').update(stable(value)).digest('hex');
+}
+
+function evidenceInstant(value: string | Date | null | undefined, nullValue: number) {
+  if (!value) return nullValue;
+  const instant = new Date(value).getTime();
+  return Number.isFinite(instant) ? instant : nullValue;
+}
+
+function acceptedEvidenceItem(item: ComposableEvidenceItem) {
+  const status = String(item.evidence.status ?? item.evidence.reviewStatus ?? '').toUpperCase();
+  return (
+    !['REJECTED', 'INVALIDATED', 'SUPERSEDED'].includes(status) &&
+    item.evidence.rejected !== true &&
+    !item.evidence.rejectedAt &&
+    !item.evidence.invalidatedAt &&
+    !item.evidence.supersededAt &&
+    !item.evidence.supersededBy
+  );
+}
+
+/**
+ * Retains complementary accepted evidence in a stable order. Exact logical
+ * duplicates share an evidence hash and collapse to one item. The newest
+ * bounded set is retained, then returned chronologically for stable hashing.
+ */
+export function composeEvidenceItems(
+  items: readonly ComposableEvidenceItem[],
+  limit = MAX_EVIDENCE_ITEMS_PER_REQUEST,
+) {
+  if (!Number.isInteger(limit) || limit < 1)
+    throw new Error('Positive evidence item limit required');
+  const ordered = [...items].filter(acceptedEvidenceItem).sort((a, b) => {
+    const observed =
+      evidenceInstant(a.observedAt, Number.POSITIVE_INFINITY) -
+      evidenceInstant(b.observedAt, Number.POSITIVE_INFINITY);
+    if (observed) return observed;
+    const created = evidenceInstant(a.createdAt, 0) - evidenceInstant(b.createdAt, 0);
+    return created || a.id.localeCompare(b.id);
+  });
+  const hashes = new Set<string>();
+  const distinct = ordered.filter((item) => {
+    if (hashes.has(item.evidenceHash)) return false;
+    hashes.add(item.evidenceHash);
+    return true;
+  });
+  return distinct.slice(-limit);
 }
 
 type LocalDateTime = {
@@ -148,8 +206,14 @@ export function localDateTimeInTimeZoneToUtc(localDateTime: string, timeZone: st
   return new Date(matches[0]!);
 }
 
-function evidenceItemIdentity(evidence: unknown, observedAt?: Date, observedTimezone?: string) {
+function evidenceItemIdentity(
+  sourceType: string,
+  evidence: unknown,
+  observedAt?: Date,
+  observedTimezone?: string,
+) {
   return evidenceHash({
+    sourceType,
     evidence,
     observedAt: observedAt?.toISOString() ?? null,
     observedTimezone: observedTimezone ?? null,
@@ -267,7 +331,7 @@ export async function recordEvidenceItem(
 ) {
   if (observedAt && !observedTimezone)
     throw new Error('Observation timezone required when observation time is supplied');
-  const hash = evidenceItemIdentity(evidence, observedAt, observedTimezone);
+  const hash = evidenceItemIdentity(sourceType, evidence, observedAt, observedTimezone);
   const item = await pool.query(
     `INSERT INTO evidence_items(request_id,source_type,evidence,evidence_hash,observed_at,observed_timezone)
      VALUES($1,$2,$3::jsonb,$4,$5,$6) ON CONFLICT(request_id,evidence_hash) DO NOTHING
@@ -518,9 +582,9 @@ export async function evidencePanelForOpportunity(
   const result = await pool.query(
     `SELECT r.*,coalesce(jsonb_agg(jsonb_build_object('id',i.id,'sourceType',i.source_type,'evidence',i.evidence,
       'evidenceHash',i.evidence_hash,'observedAt',i.observed_at,'observedTimezone',i.observed_timezone,'createdAt',i.created_at)
-      ORDER BY i.created_at,i.id) FILTER(WHERE i.id IS NOT NULL),'[]') items
+      ORDER BY i.observed_at ASC NULLS LAST,i.created_at,i.id) FILTER(WHERE i.id IS NOT NULL),'[]') items
      FROM evidence_requests r LEFT JOIN evidence_items i ON i.request_id=r.id
-     WHERE r.opportunity_id=$1 AND r.status<>'SUPERSEDED' GROUP BY r.id ORDER BY r.created_at`,
+     WHERE r.opportunity_id=$1 AND r.status<>'SUPERSEDED' GROUP BY r.id ORDER BY r.created_at,r.id`,
     [opportunityId],
   );
   return { requests: result.rows, completeness: evidenceCompleteness(result.rows) };
@@ -589,19 +653,40 @@ export async function deterministicEvidencePacket(
   const byType = (type: string) =>
     panel.requests
       .filter((request) => request.type === type)
-      .flatMap((request) => request.items.slice(-1));
+      .flatMap((request) => composeEvidenceItems(request.items));
+  const packetItem = (
+    item: ComposableEvidenceItem,
+    value: Record<string, unknown>,
+  ): Record<string, unknown> => ({
+    ...value,
+    sourceType: item.sourceType,
+    evidenceHash: item.evidenceHash,
+    observedAt: item.observedAt ? new Date(item.observedAt).toISOString() : null,
+    observedTimezone: item.observedTimezone ?? null,
+  });
   const packet = {
-    currentGscWindow: byType('GSC_COMPARISON_WINDOW').map((item) => item.evidence.current),
-    previousGscWindow: byType('GSC_COMPARISON_WINDOW').map((item) => item.evidence.previous),
-    queryPageDistribution: byType('GSC_QUERY_PAGE_DISTRIBUTION').map((item) => item.evidence),
-    targetedSourceContext: byType('TARGETED_SOURCE_CONTEXT').map((item) => item.evidence),
-    manualSerpObservation: byType('MANUAL_SERP_OBSERVATION').map((item) => ({
-      ...item.evidence,
-      observedAt: item.observedAt ? new Date(item.observedAt).toISOString() : null,
-      observedTimezone: item.observedTimezone ?? null,
-    })),
-    ownerBusinessConfirmation: byType('OWNER_BUSINESS_CONFIRMATION').map((item) => item.evidence),
-    ownerQueryOwnership: byType('OWNER_QUERY_OWNERSHIP').map((item) => item.evidence),
+    packetVersion: EVIDENCE_PACKET_VERSION,
+    currentGscWindow: byType('GSC_COMPARISON_WINDOW').map((item) =>
+      packetItem(item, item.evidence.current as Record<string, unknown>),
+    ),
+    previousGscWindow: byType('GSC_COMPARISON_WINDOW').map((item) =>
+      packetItem(item, item.evidence.previous as Record<string, unknown>),
+    ),
+    queryPageDistribution: byType('GSC_QUERY_PAGE_DISTRIBUTION').map((item) =>
+      packetItem(item, item.evidence),
+    ),
+    targetedSourceContext: byType('TARGETED_SOURCE_CONTEXT').map((item) =>
+      packetItem(item, item.evidence),
+    ),
+    manualSerpObservation: byType('MANUAL_SERP_OBSERVATION').map((item) =>
+      packetItem(item, item.evidence),
+    ),
+    ownerBusinessConfirmation: byType('OWNER_BUSINESS_CONFIRMATION').map((item) =>
+      packetItem(item, item.evidence),
+    ),
+    ownerQueryOwnership: byType('OWNER_QUERY_OWNERSHIP').map((item) =>
+      packetItem(item, item.evidence),
+    ),
     unresolvedEvidence: panel.requests
       .filter((request) => request.status === 'OPEN')
       .map((request) => ({ type: request.type, requirement: request.requirement })),
@@ -642,7 +727,12 @@ export async function correctOwnerEvidenceTimestamp(
       String(item.opportunity_id),
       client as unknown as Pool,
     );
-    const correctedHash = evidenceItemIdentity(item.evidence, corrected, input.timeZone);
+    const correctedHash = evidenceItemIdentity(
+      String(item.source_type),
+      item.evidence,
+      corrected,
+      input.timeZone,
+    );
     await client.query(
       `UPDATE evidence_items SET observed_at=$2,observed_timezone=$3,evidence_hash=$4 WHERE id=$1`,
       [input.itemId, corrected, input.timeZone, correctedHash],

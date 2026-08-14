@@ -17,6 +17,8 @@ export const evidenceRequestTypes = [
   'MANUAL_SERP_OBSERVATION',
   'OWNER_BUSINESS_CONFIRMATION',
   'OWNER_QUERY_OWNERSHIP',
+  'RESEARCH_SERP_OBSERVATION',
+  'RESEARCH_NEWER_GSC_WINDOW',
 ] as const;
 export type EvidenceRequestType = (typeof evidenceRequestTypes)[number];
 export type EvidenceCompleteness =
@@ -289,6 +291,37 @@ export async function ensureEvidenceRequest(
      RETURNING *`,
     [
       input.opportunityId,
+      input.type,
+      input.requirement,
+      input.reason,
+      input.source,
+      input.required ?? true,
+    ],
+  );
+  return result.rows[0];
+}
+
+export async function ensureResearchEvidenceRequest(
+  input: {
+    ownerResearchCaseId: string;
+    type: EvidenceRequestType;
+    requirement: string;
+    reason: string;
+    source: string;
+    required?: boolean;
+  },
+  pool: Pool = getDatabase().pool,
+) {
+  const result = await pool.query(
+    `INSERT INTO evidence_requests(owner_research_case_id,type,requirement,reason,source,required)
+     VALUES($1,$2,$3,$4,$5,$6)
+     ON CONFLICT(owner_research_case_id,type,requirement)
+       WHERE owner_research_case_id IS NOT NULL AND status<>'SUPERSEDED'
+     DO UPDATE SET reason=excluded.reason,source=excluded.source,required=excluded.required,
+       updated_at=now()
+     RETURNING *`,
+    [
+      input.ownerResearchCaseId,
       input.type,
       input.requirement,
       input.reason,

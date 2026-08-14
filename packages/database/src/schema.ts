@@ -728,13 +728,101 @@ export const sourceChangePlans = pgTable(
     index('source_change_plans_opportunity_idx').on(t.opportunityId, t.createdAt),
   ],
 );
+
+export const ownerResearchCases = pgTable(
+  'owner_research_cases',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    opportunityId: uuid('opportunity_id').references(() => opportunities.id, {
+      onDelete: 'set null',
+    }),
+    query: text('query').notNull(),
+    normalizedQuery: text('normalized_query').notNull(),
+    researchType: text('research_type').notNull(),
+    status: text('status').notNull().default('DRAFT'),
+    priority: text('priority').notNull().default('HIGH'),
+    reason: text('reason').notNull(),
+    requestedBy: text('requested_by').notNull(),
+    requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+    ownerIntent: text('owner_intent').notNull(),
+    targetPage: text('target_page'),
+    primaryGscPage: text('primary_gsc_page'),
+    repositoryId: uuid('repository_id').references(() => siteRepositories.id, {
+      onDelete: 'set null',
+    }),
+    sourceHeadSha: text('source_head_sha'),
+    lastAssessedAt: timestamp('last_assessed_at', { withTimezone: true }),
+    metadata: jsonb('metadata').notNull().default({}),
+    ...timestamps,
+  },
+  (t) => [
+    index('owner_research_cases_site_status_idx').on(t.siteId, t.status, t.createdAt),
+    index('owner_research_cases_opportunity_idx').on(t.opportunityId),
+  ],
+);
+
+export const ownerResearchRequests = pgTable(
+  'owner_research_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    caseId: uuid('case_id')
+      .notNull()
+      .references(() => ownerResearchCases.id, { onDelete: 'cascade' }),
+    requestedBy: text('requested_by').notNull(),
+    reason: text('reason').notNull(),
+    ownerIntent: text('owner_intent').notNull(),
+    requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('owner_research_requests_case_idx').on(t.caseId, t.requestedAt)],
+);
+
+export const ownerResearchSourceLinks = pgTable(
+  'owner_research_source_links',
+  {
+    caseId: uuid('case_id')
+      .notNull()
+      .references(() => ownerResearchCases.id, { onDelete: 'cascade' }),
+    mappingId: uuid('mapping_id')
+      .notNull()
+      .references(() => sourceRouteMappings.id, { onDelete: 'restrict' }),
+    role: text('role').notNull(),
+    sourceHeadSha: text('source_head_sha').notNull(),
+    linkedAt: timestamp('linked_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.caseId, t.mappingId, t.role] })],
+);
+
+export const ownerResearchFindings = pgTable(
+  'owner_research_findings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    caseId: uuid('case_id')
+      .notNull()
+      .references(() => ownerResearchCases.id, { onDelete: 'cascade' }),
+    findingType: text('finding_type').notNull(),
+    findingStatus: text('finding_status').notNull(),
+    summary: text('summary').notNull(),
+    evidence: jsonb('evidence').notNull().default({}),
+    assessedAt: timestamp('assessed_at', { withTimezone: true }).notNull().defaultNow(),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex('owner_research_findings_case_type_idx').on(t.caseId, t.findingType)],
+);
+
 export const evidenceRequests = pgTable(
   'evidence_requests',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    opportunityId: uuid('opportunity_id')
-      .notNull()
-      .references(() => opportunities.id, { onDelete: 'cascade' }),
+    opportunityId: uuid('opportunity_id').references(() => opportunities.id, {
+      onDelete: 'cascade',
+    }),
+    ownerResearchCaseId: uuid('owner_research_case_id').references(() => ownerResearchCases.id, {
+      onDelete: 'cascade',
+    }),
     type: text('type').notNull(),
     requirement: text('requirement').notNull(),
     reason: text('reason').notNull(),
@@ -743,7 +831,10 @@ export const evidenceRequests = pgTable(
     required: boolean('required').notNull().default(true),
     ...timestamps,
   },
-  (t) => [index('evidence_request_opportunity_idx').on(t.opportunityId, t.status)],
+  (t) => [
+    index('evidence_request_opportunity_idx').on(t.opportunityId, t.status),
+    index('evidence_request_research_idx').on(t.ownerResearchCaseId, t.status),
+  ],
 );
 export const evidenceItems = pgTable(
   'evidence_items',
@@ -812,6 +903,21 @@ export const ownerFacts = pgTable(
     index('owner_facts_site_scope_idx').on(t.siteId, t.factKey, t.scopeType, t.scopeKey),
     uniqueIndex('owner_facts_hash_unique_idx').on(t.factHash),
   ],
+);
+
+export const ownerResearchFactLinks = pgTable(
+  'owner_research_fact_links',
+  {
+    caseId: uuid('case_id')
+      .notNull()
+      .references(() => ownerResearchCases.id, { onDelete: 'cascade' }),
+    factId: uuid('fact_id')
+      .notNull()
+      .references(() => ownerFacts.id, { onDelete: 'restrict' }),
+    factHash: text('fact_hash').notNull(),
+    linkedAt: timestamp('linked_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.caseId, t.factId] })],
 );
 
 export const ownerFactConfirmationLinks = pgTable(

@@ -6,6 +6,8 @@ Batch 6 adds two manual worker jobs: `REFRESH_SOURCE_REPOSITORY` validates a loc
 
 Batch 6.4 adds scoped evidence requests/items, equal-window GSC comparison, exact multi-route source packets, and owner-entered evidence. Internal refresh and v3 re-evaluation are separate manual actions; incomplete evidence stops before the provider. See [evidence resolution](evidence-resolution.md).
 
+Owner-Priority Research V1 adds an owner-controlled research subject that is deliberately separate from deterministic Opportunities. It references stored GSC rows, validated source mappings, and canonical Owner Facts, then persists deterministic readiness and findings without creating jobs or invoking providers. Evidence requests can belong to exactly one Opportunity or Owner Research case. See [owner-priority research](owner-priority-research.md).
+
 Automated database tests use a separately created and migrated `seo_agent_test` database in the
 same PostgreSQL instance. Destructive test reset is fail-closed behind explicit environment,
 database-name, live-connection, and marker checks; it cannot fall back to the development database.

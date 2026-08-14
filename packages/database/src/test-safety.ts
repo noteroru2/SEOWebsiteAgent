@@ -78,7 +78,8 @@ export async function resetTestDatabase(pool: Pool) {
   await assertTestDatabaseConnection(pool);
   await pool.query(`TRUNCATE
     serp_provider_reservations,serp_api_captures,serp_location_profiles,serp_provider_usage_periods,serp_provider_configs,
-    browser_capture_tokens,serp_captures,owner_fact_confirmation_links,owner_facts,owner_fact_confirmations,evidence_items,evidence_requests,
+    browser_capture_tokens,serp_captures,evidence_items,evidence_requests,owner_research_findings,owner_research_source_links,
+    owner_research_fact_links,owner_research_requests,owner_research_cases,owner_fact_confirmation_links,owner_facts,owner_fact_confirmations,
     opportunity_runs,
     gsc_page_crawl_mappings,gsc_sync_summaries,gsc_query_page_metrics,gsc_page_metrics,
     gsc_query_metrics,gsc_daily_site_metrics,gsc_sync_runs,site_gsc_properties,gsc_properties,

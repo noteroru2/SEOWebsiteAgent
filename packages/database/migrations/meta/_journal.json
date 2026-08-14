@@ -134,6 +134,13 @@
       "when": 1786723200000,
       "tag": "0018_opportunity_independent_owner_facts",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1786809600000,
+      "tag": "0019_owner_priority_research",
+      "breakpoints": true
     }
   ]
 }

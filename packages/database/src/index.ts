@@ -671,6 +671,7 @@ export const registeredJobTypes: ReadonlySet<JobType> = new Set([
   'GENERATE_SOURCE_CHANGE_PLAN',
   'CAPTURE_SERP',
   'FETCH_SERP_API',
+  'PRODUCTION_OPPORTUNITY_WATCH',
 ]);
 
 export async function createGscOAuthState(

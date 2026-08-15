@@ -573,6 +573,70 @@ export async function dashboardSummary(database = getDatabase().db) {
   };
 }
 
+export async function ownerDashboardOverview(pool = getDatabase().pool) {
+  const started = performance.now();
+  const [
+    oppsRes,
+    ownerInputRes,
+    candidatesRes,
+    patchApprovalsRes,
+    releaseApprovalsRes,
+    watchRunRes,
+    sitesRes,
+  ] = await Promise.all([
+    pool.query(`SELECT count(*)::int AS count FROM opportunities WHERE status = 'OPEN'`),
+    pool.query(`SELECT count(*)::int AS count FROM opportunities WHERE recommendation = 'OWNER_INPUT_REQUIRED' OR (data->'evidence_requirements'->'owner_input'->>'required')::boolean = true`),
+    pool.query(`SELECT count(*)::int AS count FROM golden_path_candidates WHERE status IN ('QUALIFIED', 'OWNER_REVIEW_AVAILABLE')`),
+    pool.query(`SELECT count(*)::int AS count FROM approvals WHERE status = 'PENDING' AND (kind = 'PATCH' OR kind IS NULL)`),
+    pool.query(`SELECT count(*)::int AS count FROM approvals WHERE status = 'PENDING' AND kind = 'RELEASE'`),
+    pool.query(`SELECT * FROM opportunity_watch_runs ORDER BY created_at DESC LIMIT 1`),
+    pool.query(`
+      SELECT 
+        s.id, 
+        s.name, 
+        s.url, 
+        s.active,
+        (SELECT count(*)::int FROM opportunities WHERE site_id = s.id AND status = 'OPEN') AS opp_count,
+        (SELECT count(*)::int FROM golden_path_candidates WHERE site_id = s.id AND status IN ('QUALIFIED', 'OWNER_REVIEW_AVAILABLE')) AS candidate_count,
+        (SELECT count(*)::int FROM opportunities WHERE site_id = s.id AND (recommendation = 'OWNER_INPUT_REQUIRED' OR (data->'evidence_requirements'->'owner_input'->>'required')::boolean = true)) AS owner_input_count,
+        (SELECT count(*)::int FROM approvals WHERE site_id = s.id AND status = 'PENDING') AS approval_count,
+        (SELECT created_at FROM system_events WHERE site_id = s.id AND event = 'GSC_SYNC_SUCCESS' ORDER BY created_at DESC LIMIT 1) AS last_gsc_sync_at
+      FROM sites s
+      ORDER BY s.name ASC
+    `),
+  ]);
+
+  const activeOpportunitiesCount = oppsRes.rows[0]?.count ?? 0;
+  const ownerInputRequiredCount = ownerInputRes.rows[0]?.count ?? 0;
+  const goldenPathCandidatesCount = candidatesRes.rows[0]?.count ?? 0;
+  const patchApprovalRequiredCount = patchApprovalsRes.rows[0]?.count ?? 0;
+  const releaseAuthorizationRequiredCount = releaseApprovalsRes.rows[0]?.count ?? 0;
+  const latestWatchRun = watchRunRes.rows[0] ?? null;
+
+  let ownerActionCategory = 'NOTHING_REQUIRED';
+  if (releaseAuthorizationRequiredCount > 0) {
+    ownerActionCategory = 'RELEASE_AUTHORIZATION_REQUIRED';
+  } else if (patchApprovalRequiredCount > 0) {
+    ownerActionCategory = 'PATCH_APPROVAL_REQUIRED';
+  } else if (ownerInputRequiredCount > 0) {
+    ownerActionCategory = 'OWNER_INPUT_REQUIRED';
+  } else if (goldenPathCandidatesCount > 0) {
+    ownerActionCategory = 'GOLDEN_PATH_REVIEW_AVAILABLE';
+  }
+
+  return {
+    activeOpportunitiesCount,
+    ownerInputRequiredCount,
+    goldenPathCandidatesCount,
+    patchApprovalRequiredCount,
+    releaseAuthorizationRequiredCount,
+    ownerActionCategory,
+    latestWatchRun,
+    sitesPortfolio: sitesRes.rows,
+    timingMs: performance.now() - started,
+  };
+}
+
 export async function listSites(database = getDatabase().db) {
   const started = performance.now();
   const rows = await database

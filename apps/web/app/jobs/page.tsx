@@ -1,4 +1,5 @@
 import { listJobs } from '@seo-agent/database';
+import { formatThaiDateTime, getThaiJobStatus, getThaiJobType } from '@seo-agent/shared';
 import { enqueueSystemTest } from '../actions';
 
 export const dynamic = 'force-dynamic';
@@ -11,46 +12,51 @@ export default async function Jobs() {
     <>
       <div className="heading">
         <div>
-          <div className="eyebrow">Operations</div>
-          <h1>Jobs</h1>
-          <p className="muted">Persistent work history and current queue state.</p>
+          <div className="eyebrow">การประมวลผลพื้นหลัง</div>
+          <h1>งานของระบบ</h1>
+          <p className="muted">ประวัติการประมวลผลและสถานะคิวงานของ SEO Agent</p>
         </div>
         <form action={enqueueSystemTest}>
-          <button>Enqueue SYSTEM_TEST</button>
+          <button type="submit" className="button secondary">ทดสอบระบบ</button>
         </form>
       </div>
       <section className="panel">
         {data.rows.length ? (
-          <table>
-            <thead>
-              <tr>
-                <th>Type</th>
-                <th>Status</th>
-                <th>Attempts</th>
-                <th>Started</th>
-                <th>Failure</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.rows.map((job) => (
-                <tr key={job.id}>
-                  <td>{job.type}</td>
-                  <td>
-                    <span className="pill">{job.status}</span>
-                  </td>
-                  <td>
-                    {job.attemptCount}/{job.maxAttempts}
-                  </td>
-                  <td>{job.startedAt?.toLocaleString() ?? '—'}</td>
-                  <td>{job.failureSummary ?? '—'}</td>
+          <div style={{ overflowX: 'auto' }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>ประเภทงาน</th>
+                  <th>สถานะ</th>
+                  <th>จำนวนครั้งที่ลอง</th>
+                  <th>เวลาเริ่มทำงาน</th>
+                  <th>รายละเอียดข้อผิดพลาด</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {data.rows.map((job) => (
+                  <tr key={job.id}>
+                    <td>
+                      <strong>{getThaiJobType(job.type)}</strong>
+                      <div style={{ fontSize: '0.75rem', opacity: 0.6 }}>{job.type}</div>
+                    </td>
+                    <td>
+                      <span className="pill">{getThaiJobStatus(job.status)}</span>
+                    </td>
+                    <td>
+                      {job.attemptCount}/{job.maxAttempts}
+                    </td>
+                    <td>{formatThaiDateTime(job.startedAt)}</td>
+                    <td>{job.failureSummary ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : (
-          <div className="empty">No jobs yet</div>
+          <div className="empty">ยังไม่มีประวัติการทำงานในคิว</div>
         )}
-        <div className="timing">Query {data.timingMs.toFixed(1)} ms</div>
+        <div className="timing">ความเร็วคิวรี {data.timingMs.toFixed(1)} ms</div>
       </section>
     </>
   );

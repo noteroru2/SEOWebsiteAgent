@@ -7,12 +7,12 @@ export const metadata: Metadata = {
   description: 'Local-first SEO operations foundation',
 };
 const nav = [
-  ['/', 'Dashboard'],
-  ['/sites', 'Sites'],
-  ['/opportunities', 'Opportunities'],
-  ['/jobs', 'Jobs'],
-  ['/serp-providers', 'SERP Providers'],
-  ['/approvals', 'Approvals'],
+  ['/', 'ภาพรวม'],
+  ['/sites', 'เว็บไซต์'],
+  ['/opportunities', 'โอกาส SEO'],
+  ['/jobs', 'งานของระบบ'],
+  ['/serp-providers', 'แหล่งข้อมูลอันดับ'],
+  ['/approvals', 'รออนุมัติ'],
 ] as const;
 export default function Layout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (

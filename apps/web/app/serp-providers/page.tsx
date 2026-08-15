@@ -1,4 +1,5 @@
 import { serpProviderStatus } from '@seo-agent/database';
+import { formatThaiDateTime } from '@seo-agent/shared';
 import { configureSerpProviderAction } from '../actions';
 
 export const dynamic = 'force-dynamic';
@@ -9,77 +10,77 @@ export default async function SerpProvidersPage() {
     <>
       <div className="heading">
         <div>
-          <div className="eyebrow">Evidence automation</div>
-          <h1>SERP Providers</h1>
-          <p className="muted">Internal free-only safety limits; not provider account balances.</p>
+          <div className="eyebrow">ระบบอัตโนมัติข้อมูลผลการค้นหา</div>
+          <h1>แหล่งข้อมูลอันดับ (SERP Providers)</h1>
+          <p className="muted">เพดานความปลอดภัยสำหรับโหมดฟรี (FREE_ONLY) ของผู้ให้บริการ SERP API</p>
         </div>
       </div>
       {providers.map((provider) => (
         <section className="panel section" key={provider.provider}>
-          <h2>{provider.provider}</h2>
+          <h2>ผู้ให้บริการ: {provider.provider}</h2>
           <div className="grid">
             <p>
-              <strong>Enabled:</strong> {provider.enabled ? 'YES' : 'NO'}
+              <strong>สถานะการเปิดใช้:</strong> {provider.enabled ? 'เปิดใช้งาน (YES)' : 'ปิดใช้งาน (NO)'}
             </p>
             <p>
-              <strong>Credential configured:</strong>{' '}
-              {provider.credential_configured ? 'YES' : 'NO'}
+              <strong>ตั้งค่า API Key:</strong>{' '}
+              {provider.credential_configured ? 'ตั้งค่าแล้ว (YES)' : 'ยังไม่ได้ตั้งค่า (NO)'}
             </p>
             <p>
-              <strong>Mode:</strong> FREE_ONLY
+              <strong>โหมดค่าใช้จ่าย:</strong> FREE_ONLY (เฉพาะโหมดฟรี)
             </p>
             <p>
-              <strong>Health:</strong> {provider.effective_health}
+              <strong>สถานะความสมบูรณ์:</strong> {provider.effective_health === 'HEALTHY' ? 'ปกติ (HEALTHY)' : provider.effective_health}
             </p>
             <p>
-              <strong>Internal allowance:</strong> {provider.period_allowance ?? 'NOT INITIALIZED'}
+              <strong>โควต้าฟรีที่กำหนด:</strong> {provider.period_allowance ?? 'ยังไม่ได้เริ่มใช้งาน'}
             </p>
             <p>
-              <strong>Used:</strong> {provider.used}
+              <strong>ใช้ไปแล้ว:</strong> {provider.used} ครั้ง
             </p>
             <p>
-              <strong>Reserved:</strong> {provider.reserved}
+              <strong>สำรองไว้:</strong> {provider.reserved} ครั้ง
             </p>
             <p>
-              <strong>Remaining:</strong> {provider.remaining}
+              <strong>คงเหลือ:</strong> {provider.remaining} ครั้ง
             </p>
             <p>
-              <strong>Period:</strong>{' '}
+              <strong>รอบเวลา:</strong>{' '}
               {provider.period_start
-                ? `${new Date(provider.period_start).toLocaleString()} → ${provider.period_end ? new Date(provider.period_end).toLocaleString() : 'no automatic reset'}`
-                : 'Owner initialization required'}
+                ? `${formatThaiDateTime(provider.period_start)} → ${provider.period_end ? formatThaiDateTime(provider.period_end) : 'ไม่มีการรีเซ็ตอัตโนมัติ'}`
+                : 'รอการตั้งค่าเริ่มต้นจากเจ้าของ'}
             </p>
             <p>
-              <strong>Last success:</strong>{' '}
-              {provider.last_success_at ? new Date(provider.last_success_at).toLocaleString() : '—'}
+              <strong>ดึงข้อมูลสำเร็จล่าสุด:</strong>{' '}
+              {formatThaiDateTime(provider.last_success_at)}
             </p>
             <p>
-              <strong>Last failure:</strong>{' '}
-              {provider.last_failure_at ? new Date(provider.last_failure_at).toLocaleString() : '—'}
+              <strong>ดึงข้อมูลไม่สำเร็จล่าสุด:</strong>{' '}
+              {formatThaiDateTime(provider.last_failure_at)}
             </p>
             <p>
-              <strong>Last error:</strong> {provider.last_error_category ?? '—'}
+              <strong>ข้อผิดพลาดล่าสุด:</strong> {provider.last_error_category ?? '—'}
             </p>
             <p>
-              <strong>Consecutive failures:</strong> {provider.consecutive_failures}
+              <strong>ความล้มเหลวต่อเนื่อง:</strong> {provider.consecutive_failures} ครั้ง
             </p>
             <p>
-              <strong>Cooldown:</strong>{' '}
-              {provider.cooldown_until ? new Date(provider.cooldown_until).toLocaleString() : '—'}
+              <strong>เวลาพักระบบ (Cooldown):</strong>{' '}
+              {formatThaiDateTime(provider.cooldown_until)}
             </p>
             <p>
-              <strong>Eligible for selection:</strong> {provider.selection_eligible ? 'YES' : 'NO'}
+              <strong>พร้อมถูกเลือกใช้งาน:</strong> {provider.selection_eligible ? 'พร้อมใช้งาน (YES)' : 'ไม่พร้อมใช้งาน (NO)'}
             </p>
           </div>
-          <details>
-            <summary>Owner configuration</summary>
-            <form action={configureSerpProviderAction}>
+          <details style={{ marginTop: '12px' }}>
+            <summary style={{ cursor: 'pointer' }}>ตั้งค่าโควต้าโหมดฟรีสำหรับเจ้าของ</summary>
+            <form action={configureSerpProviderAction} style={{ marginTop: '12px' }}>
               <input type="hidden" name="provider" value={provider.provider} />
               <label>
-                <input type="checkbox" name="enabled" defaultChecked={provider.enabled} /> Enabled
+                <input type="checkbox" name="enabled" defaultChecked={provider.enabled} /> เปิดใช้งาน
               </label>
               <label>
-                Internal free allowance
+                จำนวนโควต้าฟรีภายในที่อนุญาต
                 <input
                   name="configuredAllowance"
                   type="number"
@@ -89,14 +90,14 @@ export default async function SerpProvidersPage() {
                 />
               </label>
               <label>
-                Period start
+                เวลาเริ่มต้นรอบ
                 <input name="periodStart" type="datetime-local" required />
               </label>
               <label>
-                Period end (blank for credit pool / explicit reset)
+                เวลาสิ้นสุดรอบ (เว้นว่างหากเป็น Credit Pool)
                 <input name="periodEnd" type="datetime-local" />
               </label>
-              <button>Confirm Free Allowance</button>
+              <button type="submit" className="button primary">ยืนยันโควต้าโหมดฟรี</button>
             </form>
           </details>
         </section>

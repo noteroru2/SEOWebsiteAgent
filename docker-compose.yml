@@ -49,6 +49,11 @@ services:
     deploy:
       resources:
         limits: { cpus: '0.75', memory: 512M }
+    logging:
+      driver: json-file
+      options:
+        max-size: '20m'
+        max-file: '3'
   worker:
     build:
       context: .
@@ -109,6 +114,11 @@ services:
     deploy:
       resources:
         limits: { cpus: '0.50', memory: 768M }
+    logging:
+      driver: json-file
+      options:
+        max-size: '20m'
+        max-file: '3'
   migrate:
     build:
       context: .

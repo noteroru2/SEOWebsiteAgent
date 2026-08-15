@@ -3,6 +3,7 @@ import {
   evaluateGoldenPathCandidate,
   EXCLUDED_PILOT_QUERIES,
 } from '../packages/database/src/opportunity-watch.js';
+import { ResourceGuard } from '../packages/resource-guard/src/index.js';
 
 describe('Continuous Production Opportunity Watch', () => {
   test('EXCLUDED_PILOT_QUERIES contains completed pilot queries', () => {
@@ -27,5 +28,35 @@ describe('Continuous Production Opportunity Watch', () => {
     expect(scheduledWatchCapabilities.serpCalls).toBe(0);
     expect(scheduledWatchCapabilities.patchWorkflows).toBe(0);
     expect(scheduledWatchCapabilities.sourceWrites).toBe(0);
+  });
+
+  test('ResourceGuard enforces >10GB (10240MB) hard free disk contract', async () => {
+    const mockCollector = {
+      collect: async () => ({
+        freeMemoryMb: 1024,
+        freeDiskMb: 8192,
+        loadPerCpu: 0.5,
+        platform: 'linux' as const,
+      }),
+    };
+    const guard = new ResourceGuard({}, mockCollector);
+    const evaluation = await guard.evaluate();
+    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.reasons).toContain('LOW_DISK');
+  });
+
+  test('ResourceGuard allows execution when free disk >= 10240MB (>10GB)', async () => {
+    const mockCollector = {
+      collect: async () => ({
+        freeMemoryMb: 1024,
+        freeDiskMb: 15360,
+        loadPerCpu: 0.5,
+        platform: 'linux' as const,
+      }),
+    };
+    const guard = new ResourceGuard({}, mockCollector);
+    const evaluation = await guard.evaluate();
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.reasons).toHaveLength(0);
   });
 });

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { getDatabase } from './index';
 import { equalGscWindows } from './evidence-resolution';
 import { evaluateAiAnalysisEligibility } from './ai-recommendations';
+import { resourceGuardFromEnv } from '@seo-agent/resource-guard';
 
 export type CandidateQualificationResult = {
   qualified: boolean;
@@ -146,6 +147,50 @@ export async function runOpportunityWatch(
 
   try {
     await client.query('BEGIN');
+
+    // 0. Resource Preflight Check
+    const guardEval = await resourceGuardFromEnv().evaluate();
+    if (!guardEval.allowed) {
+      const finishedAt = new Date();
+      await client.query(
+        `INSERT INTO system_events(source, level, event, detail)
+         VALUES('SCHEDULER', 'WARNING', 'RESOURCE_GUARD_BLOCKED', $1::jsonb)`,
+        [
+          JSON.stringify({
+            siteId,
+            jobId,
+            reasons: guardEval.reasons,
+            snapshot: guardEval.snapshot,
+          }),
+        ],
+      );
+
+      const activeOppRes = await client.query(
+        `SELECT count(*)::int active_cnt FROM opportunities WHERE site_id = $1 AND status = 'OPEN'`,
+        [siteId],
+      );
+
+      const watchRun = (
+        await client.query(
+          `INSERT INTO opportunity_watch_runs (
+             site_id, job_id, status, gsc_action, crawl_action, opportunity_action,
+             active_opportunities_count, qualified_candidates_count, new_candidates_count,
+             unchanged_candidates_count, started_at, finished_at
+           ) VALUES ($1, $2, 'RESOURCE_GUARD_BLOCKED', 'RESOURCE_GUARD_BLOCKED', 'RESOURCE_GUARD_BLOCKED', 'RESOURCE_GUARD_BLOCKED', $3, 0, 0, 0, $4, $5)
+           RETURNING *`,
+          [
+            siteId,
+            jobId,
+            activeOppRes.rows[0]?.active_cnt ?? 0,
+            startedAt.toISOString(),
+            finishedAt.toISOString(),
+          ],
+        )
+      ).rows[0];
+
+      await client.query('COMMIT');
+      return watchRun;
+    }
 
     // Audit Event: Watch Started
     await client.query(

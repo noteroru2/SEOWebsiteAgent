@@ -28,7 +28,8 @@ export class SystemResourceCollector implements ResourceCollector {
 
 const configSchema = z.object({
   minFreeMemoryMb: z.number().nonnegative().default(512),
-  minFreeDiskMb: z.number().nonnegative().default(2048),
+  minFreeDiskMb: z.number().nonnegative().default(10240),
+  warningFreeDiskMb: z.number().nonnegative().default(12288),
   maxLoadPerCpu: z.number().positive().default(1.5),
   heavyJobConcurrency: z.literal(1).default(1),
 });
@@ -49,14 +50,25 @@ export class ResourceGuard {
     if (snapshot.freeDiskMb < this.config.minFreeDiskMb) reasons.push('LOW_DISK');
     if (snapshot.loadPerCpu !== null && snapshot.loadPerCpu > this.config.maxLoadPerCpu)
       reasons.push('HIGH_LOAD');
-    return { allowed: reasons.length === 0, reasons, snapshot };
+
+    const warning =
+      snapshot.freeDiskMb < this.config.warningFreeDiskMb &&
+      snapshot.freeDiskMb >= this.config.minFreeDiskMb;
+
+    return {
+      allowed: reasons.length === 0,
+      warning,
+      reasons,
+      snapshot,
+    };
   }
 }
 
 export function resourceGuardFromEnv() {
   return new ResourceGuard({
     minFreeMemoryMb: Number(process.env.MIN_FREE_MEMORY_MB ?? 512),
-    minFreeDiskMb: Number(process.env.MIN_FREE_DISK_MB ?? 2048),
+    minFreeDiskMb: Number(process.env.MIN_FREE_DISK_MB ?? 10240),
+    warningFreeDiskMb: Number(process.env.WARNING_FREE_DISK_MB ?? 12288),
     maxLoadPerCpu: Number(process.env.MAX_LOAD_PER_CPU ?? 1.5),
     heavyJobConcurrency: 1,
   });

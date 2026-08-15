@@ -15,5 +15,5 @@ RUN apk add --no-cache git chromium
 ENV PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium-browser
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/worker/dist ./dist
-COPY --from=build /app/packages/database/migrations ./packages/database/migrations
+COPY --from=build /app/packages ./packages
 CMD ["node", "dist/index.js"]

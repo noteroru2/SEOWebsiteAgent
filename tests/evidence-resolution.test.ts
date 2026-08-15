@@ -831,11 +831,35 @@ describe('submitOwnerLocalObservation', () => {
     const reqCheck = await database.pool.query(`SELECT status FROM evidence_requests WHERE id=$1`, [reqId]);
     expect(reqCheck.rows[0].status).toBe('RESOLVED');
 
-    // Audit event logged
+    // Audit event logged with level='INFO'
     const auditCheck = await database.pool.query(
       `SELECT * FROM system_events WHERE event='OWNER_EVIDENCE_SUBMITTED' ORDER BY created_at DESC LIMIT 1`,
     );
     expect(auditCheck.rows[0]).toBeDefined();
+    expect(auditCheck.rows[0].level).toBe('INFO');
+    expect(auditCheck.rows[0].source).toBe('owner_ui');
+
+    // Duplicate re-submission returns existing item idempotently without error or duplicate insert
+    const dupItem = await submitOwnerLocalObservation(
+      {
+        requestId: reqId,
+        opportunityId: oppId,
+        device: 'MOBILE',
+        location: 'อำเภอเมืองอุบลราชธานี, อุบลราชธานี',
+        locationPrecision: 'CITY_LEVEL',
+        status: 'FOUND',
+        organicRank: 2,
+        landingUrl: 'https://test-observation.co.th/รับซื้อ/รับซื้อโน๊ตบุ๊ค-อุบลราชธานี',
+        resultType: 'ORGANIC',
+        actor: 'authenticated_owner',
+      },
+      database.pool,
+    );
+
+    expect(dupItem.id).toBe(item.id);
+
+    const itemsCount = await database.pool.query(`SELECT COUNT(*)::int FROM evidence_items WHERE request_id=$1`, [reqId]);
+    expect(itemsCount.rows[0].count).toBe(1);
   });
 });
 

@@ -454,14 +454,27 @@ export async function submitOwnerLocalObservation(
     observedTimezone = 'Asia/Bangkok',
   } = input;
 
-  const requestRes = await pool.query(
-    `SELECT r.id, r.type, r.opportunity_id, o.query, o.site_id
-     FROM evidence_requests r
+  const reqCheck = await pool.query(
+    `SELECT r.*, o.id opportunity_id FROM evidence_requests r
      JOIN opportunities o ON o.id = r.opportunity_id
-     WHERE r.id = $1 AND r.opportunity_id = $2 AND r.status = 'OPEN'`,
+     WHERE r.id = $1 AND r.opportunity_id = $2`,
     [requestId, opportunityId],
   );
-  if (!requestRes.rows[0]) {
+  if (!reqCheck.rows[0]) {
+    throw new Error('Evidence request not found for this opportunity');
+  }
+
+  if (reqCheck.rows[0].status === 'RESOLVED') {
+    const existingItem = await pool.query(
+      `SELECT * FROM evidence_items WHERE request_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [requestId],
+    );
+    if (existingItem.rows[0]) {
+      return existingItem.rows[0];
+    }
+  }
+
+  if (reqCheck.rows[0].status !== 'OPEN') {
     throw new Error('Open evidence request required for this opportunity');
   }
 
@@ -534,8 +547,8 @@ export async function submitOwnerLocalObservation(
   );
 
   await pool.query(
-    `INSERT INTO system_events(source, event, detail)
-     VALUES('owner_ui', 'OWNER_EVIDENCE_SUBMITTED', $1::jsonb)`,
+    `INSERT INTO system_events(source, level, event, detail)
+     VALUES('owner_ui', 'INFO', 'OWNER_EVIDENCE_SUBMITTED', $1::jsonb)`,
     [
       JSON.stringify({
         requestId,

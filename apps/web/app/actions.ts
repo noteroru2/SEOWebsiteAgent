@@ -31,6 +31,8 @@ import {
   recordWorkflowRollback,
   patchPreviews,
   patchApprovals,
+  updateSitePortfolioConfig,
+  onboardGscPropertyToPortfolio,
 } from '@seo-agent/database';
 import type { ProviderName } from '@seo-agent/serp-providers';
 import { inspectRepository } from '@seo-agent/source-understanding';
@@ -662,6 +664,49 @@ export async function triggerOpportunityWatchAction(siteId: string) {
     siteId,
   });
   safeRevalidatePath('/opportunities');
+  safeRevalidatePath('/');
+}
+
+export async function updateSitePortfolioAction(formData: FormData) {
+  const siteId = String(formData.get('siteId') || '');
+  const siteRole = String(formData.get('siteRole') || '');
+  const watchMode = String(formData.get('watchMode') || '');
+  const sourceStatus = String(formData.get('sourceStatus') || '');
+  const staggerMinuteStr = String(formData.get('staggerMinute') || '');
+  const staggerMinute = staggerMinuteStr ? Number(staggerMinuteStr) : 0;
+
+  if (!siteId) throw new Error('siteId is required');
+
+  await updateSitePortfolioConfig(siteId, {
+    siteRole: siteRole || undefined,
+    watchMode: watchMode || undefined,
+    sourceStatus: sourceStatus || undefined,
+    staggerMinute: Number.isNaN(staggerMinute) ? 0 : staggerMinute,
+  });
+
+  safeRevalidatePath(`/sites/${siteId}`);
+  safeRevalidatePath('/sites');
+  safeRevalidatePath('/');
+}
+
+export async function onboardGscPropertyAction(formData: FormData) {
+  const name = String(formData.get('name') || '');
+  const url = String(formData.get('url') || '');
+  const siteRole = String(formData.get('siteRole') || 'UNCLASSIFIED');
+  const watchMode = String(formData.get('watchMode') || 'MONITOR_ONLY');
+  const gscPropertyId = String(formData.get('gscPropertyId') || '');
+
+  if (!name || !url) throw new Error('name and url are required');
+
+  await onboardGscPropertyToPortfolio({
+    name,
+    url,
+    siteRole,
+    watchMode,
+    gscPropertyId: gscPropertyId || undefined,
+  });
+
+  safeRevalidatePath('/sites');
   safeRevalidatePath('/');
 }
 

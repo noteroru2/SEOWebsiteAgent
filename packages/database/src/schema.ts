@@ -44,6 +44,11 @@ export const sites = pgTable('sites', {
   maxPages: integer('max_pages').notNull().default(500),
   crawlDelayMs: integer('crawl_delay_ms').notNull().default(300),
   requestTimeoutMs: integer('request_timeout_ms').notNull().default(10000),
+  siteRole: text('site_role').notNull().default('UNCLASSIFIED'),
+  watchMode: text('watch_mode').notNull().default('MONITOR_ONLY'),
+  sourceStatus: text('source_status').notNull().default('NOT_CONFIGURED'),
+  staggerMinute: integer('stagger_minute').notNull().default(0),
+  gscPropertyIds: jsonb('gsc_property_ids').$type<string[]>(),
   ...timestamps,
 });
 export const siteRepositories = pgTable(

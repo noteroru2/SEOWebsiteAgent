@@ -596,6 +596,10 @@ export async function ownerDashboardOverview(pool = getDatabase().pool) {
         s.name, 
         s.url, 
         s.active,
+        COALESCE(s.site_role, 'UNCLASSIFIED') AS site_role,
+        COALESCE(s.watch_mode, 'MONITOR_ONLY') AS watch_mode,
+        COALESCE(s.source_status, 'NOT_CONFIGURED') AS source_status,
+        COALESCE(s.stagger_minute, 0) AS stagger_minute,
         (SELECT count(*)::int FROM opportunities WHERE site_id = s.id AND status = 'OPEN') AS opp_count,
         (SELECT count(*)::int FROM golden_path_candidates WHERE site_id = s.id AND status IN ('QUALIFIED', 'OWNER_REVIEW_AVAILABLE')) AS candidate_count,
         (SELECT count(*)::int FROM opportunities WHERE site_id = s.id AND (recommendation = 'OWNER_INPUT_REQUIRED' OR (data->'evidence_requirements'->'owner_input'->>'required')::boolean = true)) AS owner_input_count,
@@ -635,6 +639,180 @@ export async function ownerDashboardOverview(pool = getDatabase().pool) {
     sitesPortfolio: sitesRes.rows,
     timingMs: performance.now() - started,
   };
+}
+
+export async function updateSitePortfolioConfig(
+  siteId: string,
+  config: {
+    siteRole?: string;
+    watchMode?: string;
+    sourceStatus?: string;
+    staggerMinute?: number;
+  },
+  pool = getDatabase().pool,
+) {
+  const currentRes = await pool.query(
+    `SELECT site_role, watch_mode, source_status FROM sites WHERE id = $1`,
+    [siteId],
+  );
+  if (!currentRes.rows[0]) throw new Error(`Site not found: ${siteId}`);
+  const current = currentRes.rows[0];
+
+  const targetMode = (config.watchMode ?? current.watch_mode).toUpperCase();
+  const targetSourceStatus = (config.sourceStatus ?? current.source_status).toUpperCase();
+
+  // Phase 12 Gate: Transitioning to CHANGE_ENABLED requires sourceStatus === 'CURRENT'
+  if (targetMode === 'CHANGE_ENABLED' && targetSourceStatus !== 'CURRENT') {
+    throw new Error(
+      `Cannot transition site ${siteId} to CHANGE_ENABLED mode when source_status is ${targetSourceStatus}. Source must be CURRENT.`,
+    );
+  }
+
+  const res = await pool.query(
+    `UPDATE sites 
+     SET site_role = COALESCE($2, site_role),
+         watch_mode = COALESCE($3, watch_mode),
+         source_status = COALESCE($4, source_status),
+         stagger_minute = COALESCE($5, stagger_minute),
+         updated_at = NOW()
+     WHERE id = $1
+     RETURNING *`,
+    [
+      siteId,
+      config.siteRole ? config.siteRole.toUpperCase() : null,
+      config.watchMode ? config.watchMode.toUpperCase() : null,
+      config.sourceStatus ? config.sourceStatus.toUpperCase() : null,
+      config.staggerMinute ?? null,
+    ],
+  );
+
+  await pool.query(
+    `INSERT INTO system_events(source, level, event, site_id, detail)
+     VALUES('system', 'INFO', 'SITE_PORTFOLIO_CONFIG_UPDATED', $1, $2::jsonb)`,
+    [siteId, JSON.stringify({ previous: current, updated: res.rows[0] })],
+  );
+
+  return res.rows[0];
+}
+
+export async function onboardGscPropertyToPortfolio(
+  params: {
+    name: string;
+    url: string;
+    siteRole?: string;
+    watchMode?: string;
+    gscPropertyId?: string;
+  },
+  pool = getDatabase().pool,
+) {
+  // Canonical URL normalized
+  let canonicalUrl = params.url.trim();
+  if (!canonicalUrl.startsWith('http://') && !canonicalUrl.startsWith('https://')) {
+    canonicalUrl = `https://${canonicalUrl}`;
+  }
+  if (!canonicalUrl.endsWith('/')) {
+    canonicalUrl = `${canonicalUrl}/`;
+  }
+
+  // Default initial mode MUST be MONITOR_ONLY unless validated amphon
+  const isAmphon = canonicalUrl.includes('amphon.co.th');
+  const initialMode = params.watchMode
+    ? params.watchMode.toUpperCase()
+    : isAmphon
+      ? 'CHANGE_ENABLED'
+      : 'MONITOR_ONLY';
+
+  const initialRole = params.siteRole
+    ? params.siteRole.toUpperCase()
+    : isAmphon
+      ? 'PRIMARY_NATIONAL'
+      : 'UNCLASSIFIED';
+
+  const initialSourceStatus = isAmphon ? 'CURRENT' : 'NOT_CONFIGURED';
+
+  // Check if site already exists by URL
+  const existing = await pool.query(`SELECT * FROM sites WHERE url = $1 OR url = $2`, [
+    canonicalUrl,
+    canonicalUrl.replace(/\/$/, ''),
+  ]);
+
+  if (existing.rows[0]) {
+    const existingSite = existing.rows[0];
+    let updatedProps = existingSite.gsc_property_ids || [];
+    if (params.gscPropertyId && !updatedProps.includes(params.gscPropertyId)) {
+      updatedProps = [...updatedProps, params.gscPropertyId];
+      await pool.query(`UPDATE sites SET gsc_property_ids = $2::jsonb WHERE id = $1`, [
+        existingSite.id,
+        JSON.stringify(updatedProps),
+      ]);
+    }
+    return existingSite;
+  }
+
+  const propsJson = params.gscPropertyId ? JSON.stringify([params.gscPropertyId]) : null;
+
+  const res = await pool.query(
+    `INSERT INTO sites (name, url, site_role, watch_mode, source_status, gsc_property_ids)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+     RETURNING *`,
+    [params.name, canonicalUrl, initialRole, initialMode, initialSourceStatus, propsJson],
+  );
+
+  const newSite = res.rows[0];
+
+  await pool.query(
+    `INSERT INTO system_events(source, level, event, site_id, detail)
+     VALUES('system', 'INFO', 'SITE_ONBOARDED_TO_PORTFOLIO', $1, $2::jsonb)`,
+    [newSite.id, JSON.stringify({ name: params.name, url: canonicalUrl, mode: initialMode })],
+  );
+
+  return newSite;
+}
+
+export async function getCrossSiteQueryOverlap(pool = getDatabase().pool) {
+  const res = await pool.query(`
+    SELECT 
+      m1.query,
+      count(DISTINCT m1.site_id)::int AS site_count,
+      json_agg(DISTINCT jsonb_build_object(
+        'site_id', s.id,
+        'site_name', s.name,
+        'site_role', s.site_role,
+        'avg_position', m1.avg_position,
+        'clicks', m1.clicks
+      )) AS ranking_sites
+    FROM gsc_query_metrics m1
+    JOIN sites s ON s.id = m1.site_id
+    GROUP BY m1.query
+    HAVING count(DISTINCT m1.site_id) > 1
+    ORDER BY count(DISTINCT m1.site_id) DESC, sum(m1.clicks) DESC
+    LIMIT 50
+  `);
+  return res.rows.map((row) => ({
+    query: row.query,
+    siteCount: row.site_count,
+    rankingSites: row.ranking_sites,
+    classification: 'EXPECTED_PORTFOLIO_OVERLAP',
+  }));
+}
+
+export async function listDiscoveredGscProperties(pool = getDatabase().pool) {
+  const res = await pool.query(`
+    SELECT 
+      p.id,
+      p.property_uri,
+      p.property_type,
+      p.permission_level,
+      p.last_discovered_at,
+      s.id AS attached_site_id,
+      s.name AS attached_site_name,
+      s.watch_mode AS attached_watch_mode
+    FROM gsc_properties p
+    LEFT JOIN site_gsc_properties sg ON sg.property_id = p.id
+    LEFT JOIN sites s ON s.id = sg.site_id
+    ORDER BY p.property_uri ASC
+  `);
+  return res.rows;
 }
 
 export async function listSites(database = getDatabase().db) {

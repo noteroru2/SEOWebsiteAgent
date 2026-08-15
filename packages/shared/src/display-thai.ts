@@ -123,3 +123,44 @@ export function formatThaiDateTime(dateInput: string | Date | null | undefined) 
     hour12: false,
   }).format(d) + ' น.';
 }
+
+export const THAI_SITE_ROLES: Record<string, string> = {
+  PRIMARY_NATIONAL: 'เว็บหลักระดับประเทศ',
+  NICHE_VERTICAL: 'เว็บเฉพาะกลุ่มสินค้า',
+  LOCAL_PRIMARY: 'เว็บหลักพื้นที่',
+  SUPPORTING_SITE: 'เว็บสนับสนุน',
+  EXPERIMENTAL: 'เว็บทดลอง',
+  UNCLASSIFIED: 'ยังไม่ได้กำหนดบทบาท',
+};
+
+export function getThaiSiteRole(role: string | null | undefined) {
+  if (!role) return 'ยังไม่ได้กำหนดบทบาท';
+  return THAI_SITE_ROLES[role.toUpperCase()] ?? role;
+}
+
+export const THAI_WATCH_MODES: Record<string, string> = {
+  DISABLED: 'ปิดการติดตาม',
+  MONITOR_ONLY: 'ติดตามอย่างเดียว',
+  ANALYSIS_ENABLED: 'วิเคราะห์ได้',
+  CHANGE_ENABLED: 'วิเคราะห์และเสนอการแก้ไขได้',
+};
+
+export function getThaiWatchMode(mode: string | null | undefined) {
+  if (!mode) return 'ติดตามอย่างเดียว';
+  return THAI_WATCH_MODES[mode.toUpperCase()] ?? mode;
+}
+
+export const THAI_SOURCE_STATUSES: Record<string, string> = {
+  NOT_CONFIGURED: 'ยังไม่ได้ตั้งค่า',
+  CONFIGURED_NOT_VERIFIED: 'ตั้งค่าแล้วรอตรวจสอบ',
+  CURRENT: 'พร้อมใช้งาน (Current)',
+  STALE: 'ล้าสมัย (Stale)',
+  IDENTITY_CHANGED: 'โครงสร้างเปลี่ยน',
+  UNAVAILABLE: 'ไม่พร้อมใช้งาน',
+};
+
+export function getThaiSourceStatus(status: string | null | undefined) {
+  if (!status) return 'ยังไม่ได้ตั้งค่า';
+  return THAI_SOURCE_STATUSES[status.toUpperCase()] ?? status;
+}
+

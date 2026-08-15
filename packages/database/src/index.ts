@@ -37,7 +37,7 @@ export function getDatabase() {
   return (singleton ??= createDatabase(connectionString));
 }
 
-export * from './opportunity-watch.js';
+export * from './opportunity-watch';
 
 export async function createSite(input: unknown, database = getDatabase().db) {
   const value = createSiteSchema.parse(input);

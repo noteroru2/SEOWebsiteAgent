@@ -1,8 +1,8 @@
 import type { Pool } from 'pg';
 import { createHash } from 'node:crypto';
-import { getDatabase } from './index.js';
-import { equalGscWindows } from './evidence-resolution.js';
-import { evaluateAiAnalysisEligibility } from './ai-recommendations.js';
+import { getDatabase } from './index';
+import { equalGscWindows } from './evidence-resolution';
+import { evaluateAiAnalysisEligibility } from './ai-recommendations';
 
 export type CandidateQualificationResult = {
   qualified: boolean;

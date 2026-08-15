@@ -21,87 +21,95 @@ export default async function Sites() {
     listDiscoveredGscProperties().catch(() => []),
   ]);
 
+  // Group unattached properties by logical host for Owner Review Queue
+  const unonboardedLogicalSites = Array.from(
+    discoveredProperties
+      .filter((p: any) => !p.attached_site_id)
+      .reduce((acc: Map<string, any>, prop: any) => {
+        const host = prop.property_uri.replace(/^sc-domain:/, '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+        if (!acc.has(host)) {
+          acc.set(host, {
+            host,
+            uris: [prop.property_uri],
+            type: prop.property_type,
+            permission: prop.permission_level,
+            defaultUrl: prop.property_uri.startsWith('http') ? prop.property_uri : `https://${host}/`,
+            defaultName: host,
+          });
+        } else {
+          const existing = acc.get(host);
+          if (!existing.uris.includes(prop.property_uri)) {
+            existing.uris.push(prop.property_uri);
+          }
+        }
+        return acc;
+      }, new Map<string, any>())
+      .values()
+  );
+
   return (
     <>
       <div className="heading">
         <div>
           <div className="eyebrow">การจัดการพอร์ตโฟลิโอเว็บไซต์ (Portfolio Onboarding & Management)</div>
-          <h1>พอร์ตโฟลิโอเว็บไซต์ในความดูแล</h1>
+          <h1>พอร์ตโฟลิโอเว็บไซต์ในความดูแล ({data.rows.length} เว็บไซต์)</h1>
           <p className="muted">
             การเพิ่มเว็บไซต์ใหม่ การกำหนดบทบาท (Role) โหมดติดตาม (Watch Mode) และสถานะ Source
           </p>
         </div>
       </div>
 
-      {/* Discovered GSC Properties Onboarding Panel */}
-      {discoveredProperties.length > 0 && (
+      {/* Discovered GSC Properties Owner Review Queue Panel */}
+      {unonboardedLogicalSites.length > 0 && (
         <section className="panel section" style={{ marginBottom: '24px', borderLeft: '4px solid #10b981', padding: '16px', background: '#ecfdf5', borderRadius: '8px' }}>
           <h2 style={{ fontSize: '1.1rem', color: '#065f46', marginBottom: '8px' }}>
-            พบ Google Search Console Properties ในบัญชีของคุณ ({discoveredProperties.length} รายการ)
+            เว็บไซต์ที่รอคุณยืนยัน (Owner Review Queue: {unonboardedLogicalSites.length} เว็บไซต์)
           </h2>
           <p className="hint" style={{ color: '#047857', marginBottom: '16px' }}>
-            คุณสามารถเลือกนำเข้า Property เข้าสู่พอร์ตโฟลิโอ โดยระบบจะเริ่มต้นในโหมด <strong>ติดตามอย่างเดียว (MONITOR_ONLY)</strong> เพื่อความปลอดภัย
+            พบ Google Search Console Properties ในบัญชีของคุณที่ยังไม่ได้เชื่อมต่อเข้าสู่พอร์ตโฟลิโอ โดยเมื่อยืนยันแล้วระบบจะเริ่มต้นในโหมด <strong>ติดตามอย่างเดียว (MONITOR_ONLY)</strong> เพื่อความปลอดภัย
           </p>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', background: '#fff', borderRadius: '6px' }}>
               <thead>
                 <tr>
-                  <th>Property URI</th>
-                  <th>ประเภท</th>
+                  <th>Logical Host / Domain</th>
+                  <th>GSC Property Identifiers</th>
                   <th>สิทธิ์</th>
-                  <th>สถานะพอร์ตโฟลิโอ</th>
                   <th>การดำเนินการ</th>
                 </tr>
               </thead>
               <tbody>
-                {discoveredProperties.map((prop) => {
-                  const isAttached = !!prop.attached_site_id;
-                  const propertyUrl = prop.property_uri.replace(/^sc-domain:/, 'https://');
-                  const defaultName = prop.property_uri.replace(/^sc-domain:/, '').replace(/\/$/, '');
-
-                  return (
-                    <tr key={prop.id}>
-                      <td>
-                        <strong>{prop.property_uri}</strong>
-                      </td>
-                      <td>{prop.property_type || 'Domain / Prefix'}</td>
-                      <td>{prop.permission_level}</td>
-                      <td>
-                        {isAttached ? (
-                          <span className="pill" style={{ background: '#059669', color: '#fff' }}>
-                            อยู่ในระบบ: {prop.attached_site_name} ({getThaiWatchMode(prop.attached_watch_mode)})
-                          </span>
-                        ) : (
-                          <span className="pill" style={{ background: '#6b7280', color: '#fff' }}>
-                            ยังไม่ได้นำเข้า
-                          </span>
-                        )}
-                      </td>
-                      <td>
-                        {!isAttached ? (
-                          <form action={onboardGscPropertyAction} style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                            <input type="hidden" name="gscPropertyId" value={prop.id} />
-                            <input type="hidden" name="name" value={defaultName} />
-                            <input type="hidden" name="url" value={propertyUrl} />
-                            <select name="siteRole" defaultValue="UNCLASSIFIED" style={{ fontSize: '0.8rem', padding: '4px' }}>
-                              <option value="PRIMARY_NATIONAL">เว็บหลักระดับประเทศ</option>
-                              <option value="NICHE_VERTICAL">เว็บเฉพาะกลุ่มสินค้า</option>
-                              <option value="LOCAL_PRIMARY">เว็บหลักพื้นที่</option>
-                              <option value="SUPPORTING_SITE">เว็บสนับสนุน</option>
-                              <option value="EXPERIMENTAL">เว็บทดลอง</option>
-                              <option value="UNCLASSIFIED">ยังไม่ได้กำหนดบทบาท</option>
-                            </select>
-                            <button type="submit" className="button primary" style={{ padding: '4px 8px', fontSize: '0.8rem' }}>
-                              + นำเข้า (MONITOR_ONLY)
-                            </button>
-                          </form>
-                        ) : (
-                          <span style={{ fontSize: '0.8rem', opacity: 0.6 }}>เชื่อมต่อเรียบร้อย</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {unonboardedLogicalSites.map((site: any) => (
+                  <tr key={site.host}>
+                    <td>
+                      <strong>{site.host}</strong>
+                    </td>
+                    <td>
+                      <div style={{ fontSize: '0.8rem', opacity: 0.8 }}>
+                        {site.uris.join(' · ')}
+                      </div>
+                    </td>
+                    <td>{site.permission}</td>
+                    <td>
+                      <form action={onboardGscPropertyAction} style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <input type="hidden" name="gscPropertyId" value={site.uris[0]} />
+                        <input type="hidden" name="name" value={site.defaultName} />
+                        <input type="hidden" name="url" value={site.defaultUrl} />
+                        <select name="siteRole" defaultValue="NICHE_VERTICAL" style={{ fontSize: '0.8rem', padding: '4px' }}>
+                          <option value="PRIMARY_NATIONAL">เว็บหลักระดับประเทศ</option>
+                          <option value="NICHE_VERTICAL">เว็บเฉพาะกลุ่มสินค้า</option>
+                          <option value="LOCAL_PRIMARY">เว็บหลักพื้นที่</option>
+                          <option value="SUPPORTING_SITE">เว็บสนับสนุน</option>
+                          <option value="EXPERIMENTAL">เว็บทดลอง</option>
+                          <option value="UNCLASSIFIED">ยังไม่ได้กำหนดบทบาท</option>
+                        </select>
+                        <button type="submit" className="button primary" style={{ padding: '4px 8px', fontSize: '0.8rem' }}>
+                          + ยืนยันนำเข้า (MONITOR_ONLY)
+                        </button>
+                      </form>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

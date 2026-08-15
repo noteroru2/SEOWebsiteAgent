@@ -12,6 +12,8 @@ import {
   type RecommendationContext,
 } from '@seo-agent/ai';
 import { getDatabase } from './index';
+import { evidencePanelForOpportunity } from './evidence-resolution';
+import { sourcePanelForOpportunity } from './source-plans';
 
 const dollarsToMicros = (value: string | undefined, fallback: number) => {
   const dollars = value === undefined ? fallback : Number(value);
@@ -356,11 +358,136 @@ export async function recordAiFailedRequest(
   );
 }
 
+export type AiAnalysisEligibility = {
+  eligible: boolean;
+  status:
+    | 'ELIGIBLE'
+    | 'BLOCKED_EVIDENCE_REQUIRED'
+    | 'BLOCKED_SOURCE_NOT_REFRESHED'
+    | 'BLOCKED_SOURCE_HEAD_MISSING'
+    | 'BLOCKED_SOURCE_MAPPING_REQUIRED'
+    | 'BLOCKED_PROVIDER_NOT_CONFIGURED';
+  reasons: string[];
+  blockers: {
+    evidenceRequired: boolean;
+    sourceNotRefreshed: boolean;
+    sourceHeadMissing: boolean;
+    sourceMappingRequired: boolean;
+    providerNotConfigured: boolean;
+  };
+  providerConfigured: boolean;
+  evidenceCompleteness: string;
+  sourceStatus: 'NOT_REFRESHED' | 'UNMAPPED' | 'MAPPED' | 'HEAD_UNKNOWN';
+};
+
+export async function evaluateAiAnalysisEligibility(
+  opportunityId: string,
+  pool: Pool = getDatabase().pool,
+): Promise<AiAnalysisEligibility> {
+  const providerConfigured = Boolean(
+    process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim() !== '',
+  );
+
+  const evidencePanel = await evidencePanelForOpportunity(opportunityId, pool);
+  const openRequests = evidencePanel.requests.filter((r: Record<string, unknown>) => r.status === 'OPEN');
+  const evidenceRequired =
+    openRequests.length > 0 ||
+    evidencePanel.completeness !== 'READY_FOR_REEVALUATION';
+
+  const sourcePanel = await sourcePanelForOpportunity(opportunityId, pool);
+  const oppRes = await pool.query(
+    `SELECT o.*, s.url site_url, r.id repository_id, r.head_sha, r.last_refreshed_at, r.worktree_clean
+     FROM opportunities o JOIN sites s ON s.id=o.site_id
+     LEFT JOIN site_repositories r ON r.site_id=o.site_id AND r.enabled=true
+     WHERE o.id=$1 ORDER BY r.updated_at DESC LIMIT 1`,
+    [opportunityId],
+  );
+  const oppRow = oppRes.rows[0];
+
+  let sourceNotRefreshed = false;
+  let sourceHeadMissing = false;
+  let sourceMappingRequired = false;
+  let sourceStatus: 'NOT_REFRESHED' | 'UNMAPPED' | 'MAPPED' | 'HEAD_UNKNOWN' = 'NOT_REFRESHED';
+
+  if (!oppRow || !oppRow.repository_id || !oppRow.last_refreshed_at) {
+    sourceNotRefreshed = true;
+    sourceStatus = 'NOT_REFRESHED';
+  } else if (!oppRow.head_sha || oppRow.head_sha === '—') {
+    sourceHeadMissing = true;
+    sourceStatus = 'HEAD_UNKNOWN';
+  } else if (!sourcePanel.mapping || !(sourcePanel.mapping as Record<string, unknown>).primary_source_path) {
+    sourceMappingRequired = true;
+    sourceStatus = 'UNMAPPED';
+  } else {
+    sourceStatus = 'MAPPED';
+  }
+
+  const reasons: string[] = [];
+  if (evidenceRequired) {
+    if (openRequests.length > 0) {
+      const openReqTypes = openRequests.map((r: Record<string, unknown>) => String(r.type)).join(', ');
+      reasons.push(`Required owner evidence is missing (${openReqTypes} request open).`);
+    } else {
+      reasons.push(`Required evidence incomplete (${evidencePanel.completeness}).`);
+    }
+  }
+  if (sourceNotRefreshed) {
+    reasons.push('Source understanding has not been refreshed for this site.');
+  }
+  if (sourceHeadMissing) {
+    reasons.push('Source repository HEAD SHA is unknown.');
+  }
+  if (sourceMappingRequired) {
+    reasons.push('Source mapping required: Opportunity target page is not mapped to a repository source file.');
+  }
+  if (!providerConfigured) {
+    reasons.push('OPENAI_API_KEY is not configured on the server.');
+  }
+
+  const blockers = {
+    evidenceRequired,
+    sourceNotRefreshed,
+    sourceHeadMissing,
+    sourceMappingRequired,
+    providerNotConfigured: !providerConfigured,
+  };
+
+  const eligible =
+    !evidenceRequired &&
+    !sourceNotRefreshed &&
+    !sourceHeadMissing &&
+    !sourceMappingRequired &&
+    providerConfigured;
+
+  let status: AiAnalysisEligibility['status'] = 'ELIGIBLE';
+  if (evidenceRequired) {
+    status = 'BLOCKED_EVIDENCE_REQUIRED';
+  } else if (sourceNotRefreshed) {
+    status = 'BLOCKED_SOURCE_NOT_REFRESHED';
+  } else if (sourceHeadMissing) {
+    status = 'BLOCKED_SOURCE_HEAD_MISSING';
+  } else if (sourceMappingRequired) {
+    status = 'BLOCKED_SOURCE_MAPPING_REQUIRED';
+  } else if (!providerConfigured) {
+    status = 'BLOCKED_PROVIDER_NOT_CONFIGURED';
+  }
+
+  return {
+    eligible,
+    status,
+    reasons,
+    blockers,
+    providerConfigured,
+    evidenceCompleteness: evidencePanel.completeness,
+    sourceStatus,
+  };
+}
+
 export async function aiPanelForOpportunity(
   opportunityId: string,
   pool: Pool = getDatabase().pool,
 ) {
-  const [latest, active] = await Promise.all([
+  const [latest, active, eligibility] = await Promise.all([
     pool.query(
       `SELECT a.*,r.verdict,r.confidence recommendation_confidence,r.summary recommendation_summary,r.result,
         COALESCE(a.reused_run_id,a.id) source_run_id
@@ -374,11 +501,15 @@ export async function aiPanelForOpportunity(
         AND payload->>'opportunityId'=$1 AND status IN ('QUEUED','RUNNING') LIMIT 1`,
       [opportunityId],
     ),
+    evaluateAiAnalysisEligibility(opportunityId, pool),
   ]);
   return {
     latest: latest.rows[0] ?? null,
     activeJob: active.rows[0] ?? null,
-    configured: Boolean(process.env.OPENAI_API_KEY),
+    configured: Boolean(
+      process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim() !== '',
+    ),
+    eligibility,
   };
 }
 

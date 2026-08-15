@@ -7,6 +7,7 @@ import {
   disconnectGsc,
   dismissOpportunity,
   aiPanelForOpportunity,
+  evaluateAiAnalysisEligibility,
   submitOwnerLocalObservation,
   connectSourceRepository,
   decideSourcePlan,
@@ -117,8 +118,12 @@ export async function dismissOpportunityAction(opportunityId: string, siteId: st
 export async function enqueueAiAnalysis(opportunityId: string, siteId: string, reanalyze = false) {
   if (!/^[0-9a-f-]{36}$/i.test(opportunityId) || !/^[0-9a-f-]{36}$/i.test(siteId))
     throw new Error('Invalid opportunity');
-  const panel = await aiPanelForOpportunity(opportunityId);
-  if (!panel.configured) throw new Error('OPENAI_API_KEY is not configured');
+  const eligibility = await evaluateAiAnalysisEligibility(opportunityId);
+  if (!eligibility.eligible) {
+    throw Object.assign(new Error(eligibility.reasons.join(' | ')), {
+      code: eligibility.status,
+    });
+  }
   await enqueueJob({ type: 'ANALYZE_OPPORTUNITY', siteId, opportunityId, reanalyze });
   revalidatePath('/');
   revalidatePath(`/opportunities/${opportunityId}`);
@@ -150,6 +155,12 @@ export async function enqueueSourceRefresh(siteId: string) {
 export async function enqueueSourcePlan(opportunityId: string, siteId: string) {
   if (!/^[0-9a-f-]{36}$/i.test(opportunityId) || !/^[0-9a-f-]{36}$/i.test(siteId))
     throw new Error('Invalid opportunity');
+  const eligibility = await evaluateAiAnalysisEligibility(opportunityId);
+  if (!eligibility.eligible) {
+    throw Object.assign(new Error(eligibility.reasons.join(' | ')), {
+      code: eligibility.status,
+    });
+  }
   await enqueueJob({ type: 'GENERATE_SOURCE_CHANGE_PLAN', siteId, opportunityId });
   revalidatePath(`/opportunities/${opportunityId}`);
   revalidatePath('/jobs');
@@ -173,9 +184,13 @@ export type EvidenceReevaluationActionState = {
 function boundedReevaluationError(error: unknown) {
   const code = String((error as { code?: string }).code ?? '');
   if (code === 'AI_BUDGET_EXCEEDED') return 'AI budget exceeded.';
-  if (code === 'EVIDENCE_INCOMPLETE') return 'Required evidence is incomplete.';
+  if (code === 'EVIDENCE_INCOMPLETE' || code === 'BLOCKED_EVIDENCE_REQUIRED')
+    return 'Required evidence is incomplete.';
+  if (code === 'BLOCKED_SOURCE_NOT_REFRESHED' || code === 'BLOCKED_SOURCE_HEAD_MISSING' || code === 'BLOCKED_SOURCE_MAPPING_REQUIRED')
+    return 'Source understanding must be refreshed and mapped first.';
   if (code === 'AI_PROVIDER_ERROR') return 'The provider request failed.';
-  if (code === 'AI_AUTH_ERROR') return 'The AI provider is not configured correctly.';
+  if (code === 'AI_AUTH_ERROR' || code === 'BLOCKED_PROVIDER_NOT_CONFIGURED')
+    return 'The AI provider is not configured correctly.';
   if (code === 'AI_RATE_LIMITED') return 'The AI provider is temporarily rate limited.';
   if (error instanceof Error && error.message.includes('required evidence'))
     return 'Required evidence is incomplete.';
@@ -198,6 +213,13 @@ export async function enqueueEvidenceReevaluationAction(
         status,
         jobId: String(existing.activeJob.id),
         message: status === 'RUNNING' ? 'Analysis already running.' : 'Analysis already queued.',
+      };
+    }
+    const eligibility = await evaluateAiAnalysisEligibility(opportunityId);
+    if (!eligibility.eligible) {
+      return {
+        status: 'FAILED',
+        message: eligibility.reasons.join(' | '),
       };
     }
     const evidence = await deterministicEvidencePacket(opportunityId);

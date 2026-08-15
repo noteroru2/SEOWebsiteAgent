@@ -22,6 +22,7 @@ import {
   selectTargetedEvidenceRoutes,
   storeOwnerEvidence,
   submitOwnerLocalObservation,
+  evaluateAiAnalysisEligibility,
 } from '@seo-agent/database';
 import {
   SOURCE_PLAN_EVIDENCE_PROMPT_VERSION,
@@ -837,4 +838,70 @@ describe('submitOwnerLocalObservation', () => {
     expect(auditCheck.rows[0]).toBeDefined();
   });
 });
+
+describe('evaluateAiAnalysisEligibility', () => {
+  it('blocks AI analysis when required evidence is unresolved or source understanding is not refreshed', async () => {
+    const site = await createSite({ name: 'Eligibility Test Site', url: 'https://eligibility-test.co.th/' });
+    const oppRes = await database.pool.query(
+      `INSERT INTO opportunities(site_id, kind, title, summary, query) VALUES($1, 'QUERY_PAGE_OVERLAP_CANDIDATE', 'Test Title', 'Test Summary', 'ร้านรับซื้อโน๊ตบุ๊ค ใกล้ฉัน') RETURNING id`,
+      [site.id],
+    );
+    const oppId = oppRes.rows[0].id;
+
+    // Create open evidence request
+    const reqRes = await database.pool.query(
+      `INSERT INTO evidence_requests(opportunity_id, type, requirement, reason, source, status) VALUES($1, 'OWNER_LOCAL_OBSERVATION', 'Requirement', 'Reason', 'Test', 'OPEN') RETURNING id`,
+      [oppId],
+    );
+
+    // Evaluate eligibility when evidence is open and source is not refreshed and key is missing
+    const originalKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+
+    try {
+      const eligibility = await evaluateAiAnalysisEligibility(oppId, database.pool);
+      expect(eligibility.eligible).toBe(false);
+      expect(eligibility.status).toBe('BLOCKED_EVIDENCE_REQUIRED');
+      expect(eligibility.blockers.evidenceRequired).toBe(true);
+      expect(eligibility.blockers.sourceNotRefreshed).toBe(true);
+      expect(eligibility.blockers.providerNotConfigured).toBe(true);
+      expect(eligibility.providerConfigured).toBe(false);
+
+      // Verify reasons contain all blocker explanations
+      expect(eligibility.reasons.length).toBeGreaterThanOrEqual(3);
+      expect(eligibility.reasons.some((r) => r.includes('Required owner evidence'))).toBe(true);
+      expect(eligibility.reasons.some((r) => r.includes('Source understanding'))).toBe(true);
+      expect(eligibility.reasons.some((r) => r.includes('OPENAI_API_KEY'))).toBe(true);
+    } finally {
+      process.env.OPENAI_API_KEY = originalKey;
+    }
+  });
+
+  it('blocks AI analysis when source HEAD is unknown or unmapped', async () => {
+    const site = await createSite({ name: 'Source Gate Test Site', url: 'https://source-test.co.th/' });
+    const oppRes = await database.pool.query(
+      `INSERT INTO opportunities(site_id, kind, title, summary, query, url) VALUES($1, 'DECLINING_PAGE', 'Source Test Title', 'Test Summary', 'test query', 'https://source-test.co.th/page') RETURNING id`,
+      [site.id],
+    );
+    const oppId = oppRes.rows[0].id;
+
+    // Connect repo without refreshing HEAD
+    await database.pool.query(
+      `INSERT INTO site_repositories(site_id, local_path, repository_type, enabled, head_sha) VALUES($1, '/srv/test', 'LOCAL_GIT', true, null) RETURNING id`,
+      [site.id],
+    );
+
+    const originalKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'mock-key-for-test';
+
+    try {
+      const eligibility = await evaluateAiAnalysisEligibility(oppId, database.pool);
+      expect(eligibility.eligible).toBe(false);
+      expect(eligibility.blockers.sourceNotRefreshed).toBe(true);
+    } finally {
+      process.env.OPENAI_API_KEY = originalKey;
+    }
+  });
+});
+
 

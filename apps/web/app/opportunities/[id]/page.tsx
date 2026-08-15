@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import {
   aiPanelForOpportunity,
+  evaluateAiAnalysisEligibility,
   opportunityDetail,
   sourcePanelForOpportunity,
   deterministicEvidencePacket,
@@ -116,6 +117,7 @@ export default async function OpportunityDetailPage({
         reevaluation={reevaluation}
         automation={automation}
         locations={locations}
+        eligibility={ai.eligibility}
       />
       <div className="grid section">
         <section className="panel">
@@ -162,6 +164,7 @@ function EvidenceRequiredPanel({
   reevaluation,
   automation,
   locations,
+  eligibility,
 }: {
   evidence: Awaited<ReturnType<typeof evidencePanelForOpportunity>>;
   opportunityId: string;
@@ -171,6 +174,7 @@ function EvidenceRequiredPanel({
   reevaluation: Awaited<ReturnType<typeof evidenceReevaluationStateForOpportunity>>;
   automation: Awaited<ReturnType<typeof evidenceAutomationPanelForOpportunity>>;
   locations: Awaited<ReturnType<typeof verifiedSerpLocationProfilesForOpportunity>>;
+  eligibility?: Awaited<ReturnType<typeof evaluateAiAnalysisEligibility>>;
 }) {
   const latestJob = reevaluation.latestJob as Record<string, unknown> | null;
   const latestV3 = reevaluation.latestV3 as Record<string, unknown> | null;
@@ -246,6 +250,7 @@ function EvidenceRequiredPanel({
           historicalV3={currentV3 ? null : latestV3}
           currentEvidencePacketHash={evidencePacketHash}
           completedEvidencePacketHash={completedEvidencePacketHash}
+          eligible={eligibility?.eligible}
         />
       </div>
       {!evidence.requests.length ? (
@@ -1197,6 +1202,11 @@ function AiRecommendationPanel({
   const actions = Array.isArray(result.recommended_actions)
     ? (result.recommended_actions as Array<Record<string, unknown>>)
     : [];
+  const eligibility = ai.eligibility;
+  const isEligible = eligibility?.eligible ?? false;
+  const isBlocked = !isEligible;
+  const reasons = eligibility?.reasons ?? [];
+
   return (
     <section className="panel section ai-panel">
       <div className="heading small">
@@ -1212,21 +1222,35 @@ function AiRecommendationPanel({
           <button disabled>{ai.activeJob.status === 'RUNNING' ? 'Analyzing…' : 'Queued'}</button>
         ) : latest?.status === 'SUCCEEDED' || latest?.status === 'REUSED' ? (
           <form action={enqueueAiAnalysis.bind(null, String(item.id), String(item.site_id), true)}>
-            <button disabled={!ai.configured || !['OPEN', 'MONITOR'].includes(String(item.status))}>
+            <button disabled={isBlocked || !['OPEN', 'MONITOR'].includes(String(item.status))}>
               Reanalyze (additional cost)
             </button>
           </form>
         ) : (
           <form action={enqueueAiAnalysis.bind(null, String(item.id), String(item.site_id), false)}>
-            <button disabled={!ai.configured || !['OPEN', 'MONITOR'].includes(String(item.status))}>
+            <button disabled={isBlocked || !['OPEN', 'MONITOR'].includes(String(item.status))}>
               Analyze opportunity
             </button>
           </form>
         )}
       </div>
-      {!ai.configured ? (
-        <div className="notice">OPENAI_API_KEY is not configured on the server.</div>
+
+      <div className="notice" style={{ marginBottom: '1rem' }}>
+        <strong>OPENAI_PROVIDER_CONFIGURED:</strong> {ai.configured ? 'YES' : 'NO'}
+      </div>
+
+      {isBlocked ? (
+        <div className="notice danger-text" style={{ marginBottom: '1rem' }}>
+          <strong>AI Analysis Readiness Gate (Fail-Closed)</strong>
+          <p className="hint">AI analysis is currently blocked. The following readiness conditions must be satisfied first:</p>
+          <ul style={{ marginTop: '0.5rem', paddingLeft: '1.25rem' }}>
+            {reasons.map((reason, idx) => (
+              <li key={idx}>• {reason}</li>
+            ))}
+          </ul>
+        </div>
       ) : null}
+
       {!latest ? (
         <div className="empty compact-empty">No AI analysis has been requested.</div>
       ) : ['FAILED', 'CANCELLED'].includes(latest.status) ? (

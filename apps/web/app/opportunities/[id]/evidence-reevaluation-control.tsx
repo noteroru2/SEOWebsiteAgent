@@ -19,6 +19,7 @@ export function EvidenceReevaluationControl({
   historicalV3,
   currentEvidencePacketHash,
   completedEvidencePacketHash,
+  eligible,
 }: {
   action: ReevaluationAction;
   initialState: EvidenceReevaluationActionState;
@@ -29,6 +30,7 @@ export function EvidenceReevaluationControl({
   historicalV3: Record<string, unknown> | null;
   currentEvidencePacketHash: string;
   completedEvidencePacketHash: string | null;
+  eligible?: boolean;
 }) {
   const router = useRouter();
   const [state, formAction, pending] = useActionState(action, initialState);
@@ -52,7 +54,7 @@ export function EvidenceReevaluationControl({
           ? 'Complete'
           : 'Re-evaluate with Evidence';
   const disabled =
-    active || completeness !== 'READY_FOR_REEVALUATION' || completeForCurrentEvidence;
+    active || completeness !== 'READY_FOR_REEVALUATION' || completeForCurrentEvidence || eligible === false;
 
   return (
     <div>

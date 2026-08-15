@@ -42,6 +42,7 @@ import {
   prepareSerpCaptureJob,
   persistSerpCaptureSuccess,
   persistSerpCaptureFailure,
+  evaluateAiAnalysisEligibility,
   type Database,
   reserveSerpProviderAttempt,
   persistSerpApiSuccess,
@@ -333,6 +334,14 @@ export async function executeOne(
         throw Object.assign(new Error('Exactly one analysis subject is required'), {
           code: 'ANALYSIS_SUBJECT_REQUIRED',
         });
+      if (payload.opportunityId) {
+        const eligibility = await evaluateAiAnalysisEligibility(payload.opportunityId, pool);
+        if (!eligibility.eligible) {
+          throw Object.assign(new Error(eligibility.reasons.join(' | ')), {
+            code: eligibility.status,
+          });
+        }
+      }
       if (payload.ownerResearchCaseId && !payload.ownerAuthorizationId)
         throw Object.assign(new Error('One-time owner authorization is required'), {
           code: 'OWNER_AUTHORIZATION_REQUIRED',
@@ -675,6 +684,12 @@ export async function executeOne(
         throw Object.assign(new Error('Opportunity id is required'), {
           code: 'OPPORTUNITY_REQUIRED',
         });
+      const eligibility = await evaluateAiAnalysisEligibility(payload.opportunityId, pool);
+      if (!eligibility.eligible) {
+        throw Object.assign(new Error(eligibility.reasons.join(' | ')), {
+          code: eligibility.status,
+        });
+      }
       const config = aiConfigFromEnv();
       let analysisRunId: string | undefined;
       try {

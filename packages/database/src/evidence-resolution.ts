@@ -418,6 +418,140 @@ export async function storeOwnerEvidence(
   );
 }
 
+export type OwnerLocalObservationInput = {
+  requestId: string;
+  opportunityId: string;
+  device: 'MOBILE' | 'DESKTOP' | 'OTHER';
+  location: string;
+  locationPrecision?: 'EXACT_LOCAL' | 'CITY_LEVEL' | 'PROVINCE_LEVEL' | 'GENERIC';
+  status: 'FOUND' | 'NOT_FOUND';
+  organicRank?: number | null;
+  landingUrl?: string | null;
+  resultType: 'ORGANIC' | 'MAPS_LOCAL_PACK' | 'OTHER';
+  notes?: string | null;
+  actor?: string | null;
+  observedAt?: Date;
+  observedTimezone?: string;
+};
+
+export async function submitOwnerLocalObservation(
+  input: OwnerLocalObservationInput,
+  pool: Pool = getDatabase().pool,
+) {
+  const {
+    requestId,
+    opportunityId,
+    device,
+    location,
+    locationPrecision = 'CITY_LEVEL',
+    status,
+    organicRank,
+    landingUrl,
+    resultType,
+    notes,
+    actor,
+    observedAt,
+    observedTimezone = 'Asia/Bangkok',
+  } = input;
+
+  const requestRes = await pool.query(
+    `SELECT r.id, r.type, r.opportunity_id, o.query, o.site_id
+     FROM evidence_requests r
+     JOIN opportunities o ON o.id = r.opportunity_id
+     WHERE r.id = $1 AND r.opportunity_id = $2 AND r.status = 'OPEN'`,
+    [requestId, opportunityId],
+  );
+  if (!requestRes.rows[0]) {
+    throw new Error('Open evidence request required for this opportunity');
+  }
+
+  if (!['MOBILE', 'DESKTOP', 'OTHER'].includes(device)) {
+    throw new Error('Valid device is required (MOBILE, DESKTOP, OTHER)');
+  }
+  const cleanLocation = location.trim();
+  if (!cleanLocation || cleanLocation.length > 200) {
+    throw new Error('Valid location string is required');
+  }
+  if (!['EXACT_LOCAL', 'CITY_LEVEL', 'PROVINCE_LEVEL', 'GENERIC'].includes(locationPrecision)) {
+    throw new Error('Valid location precision is required');
+  }
+  if (!['FOUND', 'NOT_FOUND'].includes(status)) {
+    throw new Error('Valid observed result status is required (FOUND, NOT_FOUND)');
+  }
+  if (!['ORGANIC', 'MAPS_LOCAL_PACK', 'OTHER'].includes(resultType)) {
+    throw new Error('Valid result type is required (ORGANIC, MAPS_LOCAL_PACK, OTHER)');
+  }
+
+  let rank: number | null = null;
+  if (status === 'FOUND' && resultType === 'ORGANIC' && organicRank != null && String(organicRank).trim() !== '') {
+    const parsed = Number(organicRank);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100) {
+      throw new Error('Organic rank must be a positive integer between 1 and 100');
+    }
+    rank = parsed;
+  }
+
+  let validLandingUrl: string | null = null;
+  if (landingUrl?.trim()) {
+    try {
+      const parsedUrl = new URL(landingUrl.trim());
+      validLandingUrl = parsedUrl.toString();
+    } catch {
+      throw new Error('Landing URL must be a valid URL');
+    }
+  }
+
+  const cleanNotes = notes?.trim() ? notes.trim().slice(0, 500) : null;
+  const canonicalProvenance = 'OWNER_REAL_DEVICE_OBSERVATION';
+  const now = observedAt ?? new Date();
+
+  const evidenceData = {
+    provenance: canonicalProvenance,
+    device,
+    location: cleanLocation,
+    locationPrecision,
+    status,
+    organicRank: rank,
+    landingUrl: validLandingUrl,
+    resultType,
+    notes: cleanNotes,
+    submittedBy: actor || 'authenticated_owner',
+    submittedAt: now.toISOString(),
+  };
+
+  const item = await recordEvidenceItem(
+    requestId,
+    canonicalProvenance,
+    evidenceData,
+    now,
+    pool,
+    observedTimezone,
+  );
+
+  await pool.query(
+    `UPDATE evidence_requests SET status = 'RESOLVED', updated_at = now() WHERE id = $1`,
+    [requestId],
+  );
+
+  await pool.query(
+    `INSERT INTO system_events(source, event, detail)
+     VALUES('owner_ui', 'OWNER_EVIDENCE_SUBMITTED', $1::jsonb)`,
+    [
+      JSON.stringify({
+        requestId,
+        opportunityId,
+        evidenceItemId: item.id,
+        provenance: canonicalProvenance,
+        actor: actor || 'authenticated_owner',
+        timestamp: now.toISOString(),
+      }),
+    ],
+  );
+
+  return item;
+}
+
+
 async function metricsForWindow(
   pool: Pool,
   siteId: string,

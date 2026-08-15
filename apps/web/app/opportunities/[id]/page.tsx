@@ -27,6 +27,7 @@ import {
   fetchSerpApiAction,
   acceptSerpApiCaptureAction,
   rejectSerpApiCaptureAction,
+  submitOwnerLocalObservationAction,
 } from '../../actions';
 import { EvidenceReevaluationControl } from './evidence-reevaluation-control';
 import { RealBrowserCaptureTool } from './real-browser-capture-tool';
@@ -899,8 +900,96 @@ function EvidenceRequiredPanel({
                   facts. Original owner provenance retained.
                 </div>
               ) : null}
+              {request.status === 'OPEN' && request.type === 'OWNER_LOCAL_OBSERVATION' ? (
+                <section className="panel compact section">
+                  <h3>Owner Local Search Observation</h3>
+                  <p className="hint">
+                    <strong>Query:</strong> {query}
+                    <br />
+                    <strong>Request ID:</strong> {request.id}
+                    <br />
+                    <strong>Why needed:</strong> {request.reason}
+                  </p>
+                  <form
+                    action={submitOwnerLocalObservationAction.bind(
+                      null,
+                      opportunityId,
+                      request.id,
+                    )}
+                  >
+                    <label>
+                      Device *
+                      <select name="device" defaultValue="MOBILE" required>
+                        <option value="MOBILE">Mobile</option>
+                        <option value="DESKTOP">Desktop</option>
+                        <option value="OTHER">Other</option>
+                      </select>
+                    </label>
+                    <label>
+                      Location (City / District) *
+                      <input
+                        name="location"
+                        placeholder="e.g. อำเภอเมืองอุบลราชธานี, อุบลราชธานี"
+                        required
+                      />
+                    </label>
+                    <label>
+                      Location precision *
+                      <select name="locationPrecision" defaultValue="CITY_LEVEL" required>
+                        <option value="EXACT_LOCAL">Exact Local (GPS / Neighborhood)</option>
+                        <option value="CITY_LEVEL">City Level (Amphoe / District)</option>
+                        <option value="PROVINCE_LEVEL">Province Level</option>
+                        <option value="GENERIC">Generic / Thailand</option>
+                      </select>
+                    </label>
+                    <label>
+                      Observed result status *
+                      <select name="status" defaultValue="FOUND" required>
+                        <option value="FOUND">FOUND — AMPHON site visible in results</option>
+                        <option value="NOT_FOUND">NOT FOUND — AMPHON site not visible in results</option>
+                      </select>
+                    </label>
+                    <label>
+                      Result type *
+                      <select name="resultType" defaultValue="ORGANIC" required>
+                        <option value="ORGANIC">Organic Search Result</option>
+                        <option value="MAPS_LOCAL_PACK">Google Maps / Local Pack</option>
+                        <option value="OTHER">Other</option>
+                      </select>
+                    </label>
+                    <label>
+                      Observed organic rank (optional, for organic results)
+                      <input
+                        name="organicRank"
+                        type="number"
+                        min="1"
+                        max="100"
+                        placeholder="e.g. 2"
+                      />
+                    </label>
+                    <label>
+                      Observed landing URL (optional)
+                      <input
+                        name="landingUrl"
+                        type="url"
+                        placeholder="e.g. https://amphon.co.th/..."
+                      />
+                    </label>
+                    <label>
+                      Notes (optional)
+                      <textarea
+                        name="notes"
+                        placeholder="Factual notes on local search observation"
+                        maxLength={500}
+                      />
+                    </label>
+                    <button type="submit">Submit Owner Observation</button>
+                  </form>
+                </section>
+              ) : null}
               {request.status === 'OPEN' &&
               request.type.startsWith('OWNER_') &&
+              request.type !== 'OWNER_LOCAL_OBSERVATION' &&
               (request.type !== 'OWNER_BUSINESS_CONFIRMATION' ||
                 automation.facts.requirements.length === 0) ? (
                 <form action={addOwnerEvidenceAction.bind(null, opportunityId, request.id)}>
@@ -914,6 +1003,51 @@ function EvidenceRequiredPanel({
                       : 'Confirm Business Fact'}
                   </button>
                 </form>
+              ) : null}
+              {Array.isArray(request.items) && request.items.length > 0 ? (
+                <section className="submitted-evidence section">
+                  <h4>Submitted Observations ({request.items.length})</h4>
+                  {request.items.map((item: Record<string, unknown>) => {
+                    const ev = (item.evidence ?? {}) as Record<string, unknown>;
+                    return (
+                      <div className="notice" key={String(item.id)}>
+                        <p>
+                          <strong>Provenance:</strong> {String(item.sourceType || ev.provenance)}
+                        </p>
+                        <p>
+                          <strong>Device:</strong> {String(ev.device ?? '—')} ·{' '}
+                          <strong>Location:</strong> {String(ev.location ?? '—')} (
+                          {String(ev.locationPrecision ?? '—')})
+                        </p>
+                        <p>
+                          <strong>Status:</strong> {String(ev.status ?? '—')} ·{' '}
+                          <strong>Type:</strong> {String(ev.resultType ?? '—')}
+                        </p>
+                        {ev.organicRank ? (
+                          <p>
+                            <strong>Organic rank:</strong> #{String(ev.organicRank)}
+                          </p>
+                        ) : null}
+                        {ev.landingUrl ? (
+                          <p>
+                            <strong>Landing URL:</strong> {String(ev.landingUrl)}
+                          </p>
+                        ) : null}
+                        {ev.notes ? (
+                          <p>
+                            <strong>Notes:</strong> {String(ev.notes)}
+                          </p>
+                        ) : null}
+                        <p className="hint">
+                          Submitted at:{' '}
+                          {item.createdAt
+                            ? new Date(String(item.createdAt)).toLocaleString()
+                            : '—'}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </section>
               ) : null}
             </article>
           );

@@ -7,6 +7,7 @@ import {
   disconnectGsc,
   dismissOpportunity,
   aiPanelForOpportunity,
+  submitOwnerLocalObservation,
   connectSourceRepository,
   decideSourcePlan,
   storeOwnerEvidence,
@@ -598,3 +599,38 @@ export async function requestWorkflowRollbackAction(
   safeRevalidatePath('/approvals');
   safeRevalidatePath(`/approvals/${workflowId}`);
 }
+
+export async function submitOwnerLocalObservationAction(
+  opportunityId: string,
+  requestId: string,
+  formData: FormData,
+) {
+  const device = String(formData.get('device') || 'MOBILE');
+  const location = String(formData.get('location') || '');
+  const locationPrecision = String(formData.get('locationPrecision') || 'CITY_LEVEL');
+  const status = String(formData.get('status') || 'FOUND');
+  const organicRankStr = String(formData.get('organicRank') || '');
+  const landingUrl = String(formData.get('landingUrl') || '');
+  const resultType = String(formData.get('resultType') || 'ORGANIC');
+  const notes = String(formData.get('notes') || '');
+
+  const organicRank = organicRankStr ? Number(organicRankStr) : null;
+
+  await submitOwnerLocalObservation({
+    requestId,
+    opportunityId,
+    device: device as 'MOBILE' | 'DESKTOP' | 'OTHER',
+    location,
+    locationPrecision: locationPrecision as 'EXACT_LOCAL' | 'CITY_LEVEL' | 'PROVINCE_LEVEL' | 'GENERIC',
+    status: status as 'FOUND' | 'NOT_FOUND',
+    organicRank,
+    landingUrl: landingUrl || null,
+    resultType: resultType as 'ORGANIC' | 'MAPS_LOCAL_PACK' | 'OTHER',
+    notes: notes || null,
+    actor: 'authenticated_owner',
+  });
+
+  safeRevalidatePath(`/opportunities/${opportunityId}`);
+  safeRevalidatePath('/opportunities');
+}
+

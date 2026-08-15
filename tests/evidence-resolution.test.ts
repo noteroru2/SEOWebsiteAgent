@@ -21,6 +21,7 @@ import {
   safeMetricDelta,
   selectTargetedEvidenceRoutes,
   storeOwnerEvidence,
+  submitOwnerLocalObservation,
 } from '@seo-agent/database';
 import {
   SOURCE_PLAN_EVIDENCE_PROMPT_VERSION,
@@ -756,3 +757,84 @@ describe('Batch 6.4 deterministic evidence resolution', () => {
     expect(second.deduplicated).toBe(false);
   });
 });
+
+describe('submitOwnerLocalObservation', () => {
+  it('submits owner local observation for an open evidence request with server-assigned provenance', async () => {
+    const site = await createSite({ name: 'Owner Observation Test', url: 'https://test-observation.co.th/' });
+    const oppRes = await database.pool.query(
+      `INSERT INTO opportunities(site_id, kind, title, summary, query) VALUES($1, 'QUERY_PAGE_OVERLAP_CANDIDATE', 'Test Title', 'Test Summary', 'ร้านรับซื้อโน๊ตบุ๊ค ใกล้ฉัน') RETURNING id`,
+      [site.id],
+    );
+    const oppId = oppRes.rows[0].id;
+    const reqRes = await database.pool.query(
+      `INSERT INTO evidence_requests(opportunity_id, type, requirement, reason, source, status) VALUES($1, 'OWNER_LOCAL_OBSERVATION', 'Requirement', 'Reason', 'Test', 'OPEN') RETURNING id`,
+      [oppId],
+    );
+    const reqId = reqRes.rows[0].id;
+
+    // Unrelated Opportunity submission should be rejected
+    await expect(
+      submitOwnerLocalObservation(
+        {
+          requestId: reqId,
+          opportunityId: '00000000-0000-0000-0000-000000000000',
+          device: 'MOBILE',
+          location: 'Ubon',
+          status: 'FOUND',
+          resultType: 'ORGANIC',
+        },
+        database.pool,
+      ),
+    ).rejects.toThrow('Open evidence request required for this opportunity');
+
+    // Invalid device should be rejected
+    await expect(
+      submitOwnerLocalObservation(
+        {
+          requestId: reqId,
+          opportunityId: oppId,
+          device: 'INVALID' as any,
+          location: 'Ubon',
+          status: 'FOUND',
+          resultType: 'ORGANIC',
+        },
+        database.pool,
+      ),
+    ).rejects.toThrow('Valid device is required');
+
+    // Valid submission works
+    const item = await submitOwnerLocalObservation(
+      {
+        requestId: reqId,
+        opportunityId: oppId,
+        device: 'MOBILE',
+        location: 'อำเภอเมืองอุบลราชธานี, อุบลราชธานี',
+        locationPrecision: 'CITY_LEVEL',
+        status: 'FOUND',
+        organicRank: 2,
+        landingUrl: 'https://test-observation.co.th/รับซื้อ/รับซื้อโน๊ตบุ๊ค-อุบลราชธานี',
+        resultType: 'ORGANIC',
+        notes: 'Observed on mobile Chrome',
+        actor: 'authenticated_owner',
+      },
+      database.pool,
+    );
+
+    expect(item.source_type).toBe('OWNER_REAL_DEVICE_OBSERVATION');
+    expect(item.evidence.provenance).toBe('OWNER_REAL_DEVICE_OBSERVATION');
+    expect(item.evidence.device).toBe('MOBILE');
+    expect(item.evidence.location).toBe('อำเภอเมืองอุบลราชธานี, อุบลราชธานี');
+    expect(item.evidence.organicRank).toBe(2);
+
+    // Request status updated to RESOLVED
+    const reqCheck = await database.pool.query(`SELECT status FROM evidence_requests WHERE id=$1`, [reqId]);
+    expect(reqCheck.rows[0].status).toBe('RESOLVED');
+
+    // Audit event logged
+    const auditCheck = await database.pool.query(
+      `SELECT * FROM system_events WHERE event='OWNER_EVIDENCE_SUBMITTED' ORDER BY created_at DESC LIMIT 1`,
+    );
+    expect(auditCheck.rows[0]).toBeDefined();
+  });
+});
+

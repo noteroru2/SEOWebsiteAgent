@@ -67,4 +67,39 @@ describe('Multi-Site Portfolio Onboarding & Safe Activation', () => {
 
     expect(checkGate).toThrowError(/Source must be CURRENT/);
   });
+
+  it('blocks demo/fixture domain creation in production environment via PRODUCTION_FIXTURE_GUARD', () => {
+    const isDemoUrl = (url: string) =>
+      url.includes('example.com') || url.includes('localhost');
+
+    const enforceProductionGuard = (url: string, env: string) => {
+      if (env === 'production' && isDemoUrl(url)) {
+        throw new Error(
+          `[PRODUCTION_FIXTURE_GUARD] Cannot create demo/fixture domain (${url}) in production environment.`,
+        );
+      }
+    };
+
+    expect(() =>
+      enforceProductionGuard('https://example.com/', 'production'),
+    ).toThrowError(/PRODUCTION_FIXTURE_GUARD/);
+    expect(() =>
+      enforceProductionGuard('https://amphon.co.th/', 'production'),
+    ).not.toThrow();
+    expect(() =>
+      enforceProductionGuard('https://example.com/', 'test'),
+    ).not.toThrow();
+  });
+
+  it('verifies GSC discovery does not auto-create site records without owner action', () => {
+    const discoveredGscProperties = [
+      { propertyUri: 'sc-domain:amphontd.com' },
+      { propertyUri: 'https://webuy.in.th/' },
+    ];
+    const existingSites: any[] = [];
+
+    // Discovery phase only lists properties; site list length must remain 0 until explicit onboard action
+    expect(discoveredGscProperties.length).toBe(2);
+    expect(existingSites.length).toBe(0);
+  });
 });

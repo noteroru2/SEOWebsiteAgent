@@ -41,6 +41,11 @@ export * from './opportunity-watch';
 
 export async function createSite(input: unknown, database = getDatabase().db) {
   const value = createSiteSchema.parse(input);
+  if (process.env.NODE_ENV === 'production' && isDemoOrFixtureUrl(value.url)) {
+    throw new Error(
+      `[PRODUCTION_FIXTURE_GUARD] Cannot create demo/fixture domain (${value.url}) in production environment.`,
+    );
+  }
   const [site] = await database.insert(schema.sites).values(value).returning();
   return site!;
 }
@@ -695,6 +700,17 @@ export async function updateSitePortfolioConfig(
   return res.rows[0];
 }
 
+export function isDemoOrFixtureUrl(url: string): boolean {
+  const normalized = url.toLowerCase().trim();
+  return (
+    normalized.includes('example.com') ||
+    normalized.includes('example.org') ||
+    normalized.includes('example.net') ||
+    normalized.includes('localhost') ||
+    normalized.includes('127.0.0.1')
+  );
+}
+
 export async function onboardGscPropertyToPortfolio(
   params: {
     name: string;
@@ -712,6 +728,13 @@ export async function onboardGscPropertyToPortfolio(
   }
   if (!canonicalUrl.endsWith('/')) {
     canonicalUrl = `${canonicalUrl}/`;
+  }
+
+  // Phase 8: Production Fixture Guard
+  if (process.env.NODE_ENV === 'production' && isDemoOrFixtureUrl(canonicalUrl)) {
+    throw new Error(
+      `[PRODUCTION_FIXTURE_GUARD] Cannot onboard demo/fixture domain (${canonicalUrl}) in production environment.`,
+    );
   }
 
   // Default initial mode MUST be MONITOR_ONLY unless validated amphon

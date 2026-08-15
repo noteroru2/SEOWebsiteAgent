@@ -1,5 +1,10 @@
 import Link from 'next/link';
-import { listOpportunities } from '@seo-agent/database';
+import {
+  listOpportunities,
+  getLatestOpportunityWatchRun,
+  getGoldenPathCandidates,
+} from '@seo-agent/database';
+import { triggerOpportunityWatchAction } from '../actions';
 import { OPPORTUNITY_TYPES } from '@seo-agent/opportunity-engine';
 
 export const dynamic = 'force-dynamic';
@@ -17,6 +22,10 @@ export default async function Opportunities({
 }) {
   const filters = await searchParams;
   const data = await listOpportunities(filters);
+  const activeSiteId = filters.siteId || 'f4ab6ec8-8cdb-4444-a6b6-3dc5c4d20bac';
+  const watchRun = await getLatestOpportunityWatchRun(activeSiteId);
+  const candidates = await getGoldenPathCandidates(activeSiteId);
+
   return (
     <>
       <div className="heading">
@@ -28,6 +37,65 @@ export default async function Opportunities({
           </p>
         </div>
       </div>
+
+      <section className="panel section" style={{ marginBottom: '1.5rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div className="eyebrow">Continuous Production Watch</div>
+            <h2>Opportunity Detection Watch</h2>
+            <p className="hint">
+              Cadence: <strong>DAILY (09:15 Asia/Bangkok)</strong> · Heavy Concurrency: <strong>1</strong> · Detection Only
+            </p>
+          </div>
+          <form action={triggerOpportunityWatchAction.bind(null, activeSiteId)}>
+            <button type="submit">Run Detection Watch (Verification)</button>
+          </form>
+        </div>
+
+        {candidates.length > 0 ? (
+          <div className="notice success-text" style={{ marginTop: '1rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span className="pill priority-high">GOLDEN PATH CANDIDATE READY</span>
+              <strong>Golden Path Candidate Ready</strong>
+            </div>
+            <p className="hint" style={{ marginTop: '0.25rem' }}>
+              A genuine production candidate has satisfied all evidence, sample, and safety rules for owner review.
+            </p>
+            <div style={{ marginTop: '1rem' }}>
+              {candidates.map((c) => (
+                <div key={c.id} className="notice" style={{ marginBottom: '0.5rem' }}>
+                  <p><strong>Query:</strong> {c.query}</p>
+                  <p><strong>Target:</strong> {c.target_url}</p>
+                  <p><strong>Reason:</strong> {c.selection_reason}</p>
+                  <p className="hint">Risk: {c.risk} · Sample: {c.sample_sufficiency} · Source: {c.source_file}</p>
+                  <div style={{ marginTop: '0.5rem' }}>
+                    <Link href={`/opportunities/${c.opportunity_id}`}>
+                      <button>Start Governed Review</button>
+                    </Link>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="notice" style={{ marginTop: '1rem' }}>
+            <p>
+              <strong>No Golden Path candidate currently meets the evidence and safety requirements.</strong>
+            </p>
+            <p className="hint">
+              SEO Agent will continue monitoring new production data. Scheduled watch calls 0 OpenAI and 0 SERP APIs.
+            </p>
+          </div>
+        )}
+
+        <div className="timing" style={{ marginTop: '0.75rem' }}>
+          Last Watch Run:{' '}
+          {watchRun?.finished_at ? new Date(watchRun.finished_at).toLocaleString() : 'Not executed yet'}
+          {' · '}Active Opportunities: {data.rows.length}
+          {' · '}Qualified Candidates: {candidates.length}
+        </div>
+      </section>
+
       <div className="stats three">
         <Stat label="High" value={data.counts.HIGH ?? 0} />
         <Stat label="Medium" value={data.counts.MEDIUM ?? 0} />

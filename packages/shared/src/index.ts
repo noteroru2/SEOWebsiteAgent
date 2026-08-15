@@ -102,6 +102,7 @@ export const jobTypes = [
   'GENERATE_SOURCE_CHANGE_PLAN',
   'CAPTURE_SERP',
   'FETCH_SERP_API',
+  'PRODUCTION_OPPORTUNITY_WATCH',
 ] as const;
 export type JobType = (typeof jobTypes)[number];
 

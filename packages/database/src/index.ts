@@ -37,6 +37,8 @@ export function getDatabase() {
   return (singleton ??= createDatabase(connectionString));
 }
 
+export * from './opportunity-watch.js';
+
 export async function createSite(input: unknown, database = getDatabase().db) {
   const value = createSiteSchema.parse(input);
   const [site] = await database.insert(schema.sites).values(value).returning();
@@ -52,6 +54,7 @@ export async function enqueueJob(input: unknown, database = getDatabase().db) {
     'ANALYZE_OPPORTUNITY',
     'REFRESH_SOURCE_REPOSITORY',
     'GENERATE_SOURCE_CHANGE_PLAN',
+    'PRODUCTION_OPPORTUNITY_WATCH',
   ];
   const insert = database.insert(schema.jobs).values({
     type: value.type,

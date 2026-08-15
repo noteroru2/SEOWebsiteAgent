@@ -1269,3 +1269,57 @@ export const patchWorkflowAuditEvents = pgTable(
   },
   (t) => [index('patch_audit_workflow_idx').on(t.workflowId, t.createdAt)],
 );
+
+export const goldenPathCandidates = pgTable(
+  'golden_path_candidates',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    opportunityId: uuid('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'cascade' }),
+    status: text('status').notNull().default('QUALIFIED'),
+    fingerprint: text('fingerprint').notNull(),
+    qualificationVersion: text('qualification_version').notNull().default('v1'),
+    selectionReason: text('selection_reason').notNull(),
+    gscRunId: uuid('gsc_run_id').references(() => gscSyncRuns.id, { onDelete: 'set null' }),
+    analysisWindow: jsonb('analysis_window').notNull().default({}),
+    sourceHead: text('source_head').notNull(),
+    targetUrl: text('target_url').notNull(),
+    sourceFile: text('source_file'),
+    risk: text('risk').notNull().default('LOW'),
+    sampleSufficiency: text('sample_sufficiency').notNull(),
+    lastEvaluatedAt: timestamp('last_evaluated_at', { withTimezone: true }).notNull().defaultNow(),
+    ownerSeenAt: timestamp('owner_seen_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    index('golden_path_candidates_site_status_idx').on(t.siteId, t.status, t.createdAt),
+    index('golden_path_candidates_fingerprint_idx').on(t.siteId, t.fingerprint),
+  ],
+);
+
+export const opportunityWatchRuns = pgTable(
+  'opportunity_watch_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    jobId: uuid('job_id').references(() => jobs.id, { onDelete: 'set null' }),
+    status: text('status').notNull().default('SUCCESS'),
+    gscAction: text('gsc_action').notNull(),
+    crawlAction: text('crawl_action').notNull(),
+    opportunityAction: text('opportunity_action').notNull(),
+    activeOpportunitiesCount: integer('active_opportunities_count').notNull().default(0),
+    qualifiedCandidatesCount: integer('qualified_candidates_count').notNull().default(0),
+    newCandidatesCount: integer('new_candidates_count').notNull().default(0),
+    unchangedCandidatesCount: integer('unchanged_candidates_count').notNull().default(0),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('opportunity_watch_runs_site_idx').on(t.siteId, t.createdAt)],
+);

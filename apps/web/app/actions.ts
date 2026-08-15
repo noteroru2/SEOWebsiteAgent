@@ -656,3 +656,12 @@ export async function submitOwnerLocalObservationAction(
   safeRevalidatePath('/opportunities');
 }
 
+export async function triggerOpportunityWatchAction(siteId: string) {
+  await enqueueJob({
+    type: 'PRODUCTION_OPPORTUNITY_WATCH',
+    siteId,
+  });
+  safeRevalidatePath('/opportunities');
+  safeRevalidatePath('/');
+}
+

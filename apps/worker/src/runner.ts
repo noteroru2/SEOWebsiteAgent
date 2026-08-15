@@ -47,6 +47,7 @@ import {
   reserveSerpProviderAttempt,
   persistSerpApiSuccess,
   persistSerpApiFailure,
+  runOpportunityWatch,
 } from '@seo-agent/database';
 import { resourceGuardFromEnv, type ResourceGuard } from '@seo-agent/resource-guard';
 import { crawlSite } from '@seo-agent/crawler';
@@ -121,6 +122,12 @@ export async function executeOne(
         },
         pool,
       );
+      return { state: 'SUCCEEDED' as const, job: completed };
+    }
+    if (type === 'PRODUCTION_OPPORTUNITY_WATCH') {
+      const siteId = String(job.site_id ?? 'f4ab6ec8-8cdb-4444-a6b6-3dc5c4d20bac');
+      const watchRun = await runOpportunityWatch(siteId, id, pool);
+      const completed = await markJobSucceeded(id, watchRun, pool);
       return { state: 'SUCCEEDED' as const, job: completed };
     }
     if (type === 'CAPTURE_SERP') {

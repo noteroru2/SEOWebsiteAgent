@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: seo_agent
       POSTGRES_USER: seo_agent
-      POSTGRES_PASSWORD: local_only_change_me
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_only_change_me}
     ports:
       - '55432:5432'
     volumes:
@@ -22,7 +22,7 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
     environment:
-      DATABASE_URL: postgresql://seo_agent:local_only_change_me@postgres:5432/seo_agent
+      DATABASE_URL: ${DATABASE_URL:-postgresql://seo_agent:local_only_change_me@postgres:5432/seo_agent}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:3000/api/google/callback}
@@ -59,7 +59,7 @@ services:
       context: .
       dockerfile: apps/worker/Dockerfile
     environment:
-      DATABASE_URL: postgresql://seo_agent:local_only_change_me@postgres:5432/seo_agent
+      DATABASE_URL: ${DATABASE_URL:-postgresql://seo_agent:local_only_change_me@postgres:5432/seo_agent}
       WORKER_ID: worker-compose-1
       HEAVY_JOB_CONCURRENCY: 1
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
@@ -125,7 +125,7 @@ services:
       dockerfile: apps/worker/Dockerfile
     command: ['node', 'dist/migrate.js']
     environment:
-      DATABASE_URL: postgresql://seo_agent:local_only_change_me@postgres:5432/seo_agent
+      DATABASE_URL: ${DATABASE_URL:-postgresql://seo_agent:local_only_change_me@postgres:5432/seo_agent}
     depends_on:
       postgres: { condition: service_healthy }
     restart: 'no'

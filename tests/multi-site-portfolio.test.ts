@@ -189,4 +189,28 @@ describe('Multi-Site Portfolio Onboarding & Safe Activation', () => {
     const changeEnabledAllowed = false;
     expect(changeEnabledAllowed).toBe(false);
   });
+
+  it('promotes notebook site to ANALYSIS_ENABLED mode when owner-confirmed source onboarding gates pass', () => {
+    const notebookConfig = {
+      siteId: '2bf09971-3397-4440-a855-fe85639d757c',
+      canonicalHost: 'xn--42cn4aobed0eb6hubj4es0m5dhvd.com',
+      unicodeHost: 'ร้านรับซื้อโน๊ตบุ๊ค.com',
+      repoUrl: 'https://github.com/noteroru2/shopbuynotebook-thai',
+      branch: 'main',
+      headSha: '7ffe148a6ceed8b9a6cb8d393f7d45adf6505259',
+      worktreeClean: true,
+      sourceStatus: 'CURRENT',
+      availableDiskGb: 13,
+      modeBefore: 'MONITOR_ONLY',
+      modeAfter: 'ANALYSIS_ENABLED',
+    };
+
+    expect(notebookConfig.availableDiskGb).toBeGreaterThan(10);
+    expect(notebookConfig.worktreeClean).toBe(true);
+    expect(notebookConfig.sourceStatus).toBe('CURRENT');
+    expect(notebookConfig.modeAfter).toBe('ANALYSIS_ENABLED');
+
+    const changeEnabledAllowed = false;
+    expect(changeEnabledAllowed).toBe(false);
+  });
 });

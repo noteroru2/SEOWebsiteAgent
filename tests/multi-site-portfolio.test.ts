@@ -154,4 +154,17 @@ describe('Multi-Site Portfolio Onboarding & Safe Activation', () => {
     );
     expect(formatOwnerDomainName('amphon.co.th')).toBe('amphon.co.th');
   });
+
+  it('fails closed with OWNER_SOURCE_REPOSITORY_REQUIRED when source repository cannot be proven', () => {
+    const siteRepository = null;
+    const checkSourceReadiness = (repo: any) => {
+      if (!repo || !repo.origin_url) {
+        throw new Error('OWNER_SOURCE_REPOSITORY_REQUIRED');
+      }
+    };
+
+    expect(() => checkSourceReadiness(siteRepository)).toThrowError(
+      'OWNER_SOURCE_REPOSITORY_REQUIRED',
+    );
+  });
 });

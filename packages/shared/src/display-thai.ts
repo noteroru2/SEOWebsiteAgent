@@ -164,3 +164,22 @@ export function getThaiSourceStatus(status: string | null | undefined) {
   return THAI_SOURCE_STATUSES[status.toUpperCase()] ?? status;
 }
 
+export function formatOwnerDomainName(rawInput: string | null | undefined): string {
+  if (!rawInput) return '—';
+  let host = String(rawInput).trim();
+  host = host
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/.*$/, '')
+    .replace(/^www\./i, '')
+    .replace(/^sc-domain:/i, '');
+
+  try {
+    const { domainToUnicode } = require('node:url');
+    const unicode = domainToUnicode(host);
+    return unicode.normalize('NFC');
+  } catch {
+    return host;
+  }
+}
+
+

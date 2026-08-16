@@ -3,6 +3,7 @@ import {
   getThaiSiteRole,
   getThaiWatchMode,
   getThaiSourceStatus,
+  formatOwnerDomainName,
   THAI_SITE_ROLES,
   THAI_WATCH_MODES,
   THAI_SOURCE_STATUSES,
@@ -130,5 +131,27 @@ describe('Multi-Site Portfolio Onboarding & Safe Activation', () => {
     const ownerReviewQueueCount = totalLogicalSitesCount - onboardedPortfolioSitesCount;
 
     expect(ownerReviewQueueCount).toBe(3);
+  });
+
+  it('programmatically decodes Punycode hostnames to Unicode NFC via formatOwnerDomainName helper', () => {
+    expect(formatOwnerDomainName('xn--12cman8e0bjt1czaccb9b1fg31ad.com')).toBe(
+      'รับซื้อกล้องมือสอง.com',
+    );
+    expect(formatOwnerDomainName('xn--82c8aaex2b0cc4bb4e0fya6jc.com')).toBe(
+      'จํานําไอโฟนอุบล.com',
+    );
+    expect(formatOwnerDomainName('xn--c3c1abc0aub6fa0bi9d0h0a0eh.com')).toBe(
+      'ร้านรับซื้อไอโฟน.com',
+    );
+    expect(formatOwnerDomainName('xn--c3c3a0aa6cvaf8b9dze.com')).toBe(
+      'เรารับซื้อ.com',
+    );
+    expect(formatOwnerDomainName('xn--c3c3ab7an0ca2a0dm8p.com')).toBe(
+      'รับซื้ออุบล.com',
+    );
+    expect(formatOwnerDomainName('xn--82c8abc5bq8c2alb1e0nc.com')).toBe(
+      'รับจํานําอุบล.com',
+    );
+    expect(formatOwnerDomainName('amphon.co.th')).toBe('amphon.co.th');
   });
 });

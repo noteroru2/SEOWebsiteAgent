@@ -5,6 +5,7 @@ import {
   getThaiSiteRole,
   getThaiSourceStatus,
   getThaiWatchMode,
+  formatOwnerDomainName,
 } from '@seo-agent/shared';
 import {
   createConfiguredSite,
@@ -158,12 +159,15 @@ export default async function Sites() {
                   const roleThai = getThaiSiteRole(site.site_role || site.siteRole);
                   const modeThai = getThaiWatchMode(site.watch_mode || site.watchMode);
                   const sourceThai = getThaiSourceStatus(site.source_status || site.sourceStatus);
+                  const siteDisplayName = formatOwnerDomainName(
+                    site.name && !site.name.includes('?') ? site.name : site.url
+                  );
 
                   return (
                     <tr key={site.id}>
                       <td>
                         <Link href={`/sites/${site.id}`}>
-                          <strong>{site.name}</strong>
+                          <strong>{siteDisplayName}</strong>
                         </Link>
                         <div style={{ fontSize: '0.8rem', opacity: 0.7 }}>{site.url}</div>
                       </td>

@@ -182,4 +182,21 @@ export function formatOwnerDomainName(rawInput: string | null | undefined): stri
   }
 }
 
+export function formatCoveragePercentage(
+  numerator: number | null | undefined,
+  denominator: number | null | undefined,
+  fallbackText = 'ยังไม่มีข้อมูลให้วัด'
+): string {
+  const num = Number(numerator || 0);
+  const den = Number(denominator || 0);
+
+  if (den <= 0) {
+    return fallbackText;
+  }
+
+  const pct = Math.min(100, Math.max(0, (num / den) * 100));
+  return `${pct.toFixed(1)}%`;
+}
+
+
 

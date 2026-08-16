@@ -15,7 +15,9 @@ export function normalizeUrl(input: string | URL, base?: string | URL): string {
 }
 
 export function isSameSite(candidate: string, base: string) {
-  return new URL(candidate).hostname === new URL(base).hostname;
+  const candHost = new URL(candidate).hostname.toLowerCase().replace(/^www\./i, '');
+  const baseHost = new URL(base).hostname.toLowerCase().replace(/^www\./i, '');
+  return candHost === baseHost;
 }
 
 function blockedIpv4(address: string) {

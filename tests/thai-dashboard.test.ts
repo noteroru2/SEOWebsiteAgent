@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatThaiDateTime,
   getThaiConfidence,
+  getThaiHealthStatus,
   getThaiJobStatus,
   getThaiJobType,
   getThaiOpportunityType,
@@ -72,5 +73,14 @@ describe('Thai Owner Dashboard & Display Dictionary', () => {
     const formatted = formatThaiDateTime('2026-08-15T09:15:00.000Z');
     expect(formatted).toContain('15');
     expect(formatted).toContain('น.');
+  });
+
+  it('translates system health statuses into Thai', () => {
+    expect(getThaiHealthStatus('HEALTHY')).toBe('ปกติ');
+    expect(getThaiHealthStatus('DEGRADED')).toBe('ต้องการการตรวจสอบ');
+    expect(getThaiHealthStatus('FAILED')).toBe('มีปัญหา');
+    expect(getThaiHealthStatus('UNKNOWN')).toBe('ยังตรวจสอบสถานะไม่ได้');
+    expect(getThaiHealthStatus('STALE')).toBe('ข้อมูลสถานะล้าสมัย');
+    expect(getThaiHealthStatus(null)).toBe('ยังตรวจสอบสถานะไม่ได้');
   });
 });

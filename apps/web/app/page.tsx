@@ -25,17 +25,11 @@ export default async function Dashboard() {
   let aiSpend: Awaited<ReturnType<typeof aiSpendSummary>> | null = null;
   let ownerData: Awaited<ReturnType<typeof ownerDashboardOverview>> | null = null;
 
-  try {
-    [data, dbHealthy, top, aiSpend, ownerData] = await Promise.all([
-      dashboardSummary(),
-      databaseHealthy(),
-      dashboardTopOpportunities(),
-      aiSpendSummary(),
-      ownerDashboardOverview(),
-    ]);
-  } catch {
-    /* health state is rendered */
-  }
+  try { dbHealthy = await databaseHealthy(); } catch { dbHealthy = false; }
+  try { data = await dashboardSummary(); } catch { data = null; }
+  try { top = await dashboardTopOpportunities(); } catch { top = { rows: [], timingMs: 0 }; }
+  try { aiSpend = await aiSpendSummary(); } catch { aiSpend = null; }
+  try { ownerData = await ownerDashboardOverview(); } catch { ownerData = null; }
 
   const isSystemHealthy = dbHealthy && (data?.workerHealthy ?? false);
 
@@ -341,11 +335,35 @@ function Stat({ label, value }: { label: string; value: string | number }) {
   );
 }
 
-function Health({ label, healthy, text }: { label: string; healthy: boolean; text?: string }) {
+type HealthStatusType = 'HEALTHY' | 'DEGRADED' | 'FAILED' | 'UNKNOWN' | 'STALE';
+
+const HEALTH_STATUS_MAP: Record<HealthStatusType, { label: string; className: string }> = {
+  HEALTHY: { label: 'ปกติ', className: 'ok' },
+  DEGRADED: { label: 'ต้องการการตรวจสอบ', className: 'warn' },
+  FAILED: { label: 'มีปัญหา', className: 'error' },
+  UNKNOWN: { label: 'ยังตรวจสอบสถานะไม่ได้', className: 'warn' },
+  STALE: { label: 'ข้อมูลสถานะล้าสมัย', className: 'warn' },
+};
+
+function Health({
+  label,
+  healthy,
+  status,
+  text,
+}: {
+  label: string;
+  healthy?: boolean;
+  status?: HealthStatusType;
+  text?: string;
+}) {
+  const currentStatus: HealthStatusType = status ?? (healthy ? 'HEALTHY' : 'DEGRADED');
+  const mapped = HEALTH_STATUS_MAP[currentStatus] ?? HEALTH_STATUS_MAP.DEGRADED;
+
   return (
     <div>
       <span>{label}</span>
-      <strong className={healthy ? 'ok' : 'warn'}>{text ?? (healthy ? 'ปกติ' : 'ต้องการการตรวจสอบ')}</strong>
+      <strong className={mapped.className}>{text ?? mapped.label}</strong>
     </div>
   );
 }
+

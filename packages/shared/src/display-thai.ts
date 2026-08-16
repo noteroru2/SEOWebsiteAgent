@@ -198,5 +198,19 @@ export function formatCoveragePercentage(
   return `${pct.toFixed(1)}%`;
 }
 
+export const THAI_HEALTH_STATUSES: Record<string, string> = {
+  HEALTHY: 'ปกติ',
+  DEGRADED: 'ต้องการการตรวจสอบ',
+  FAILED: 'มีปัญหา',
+  UNKNOWN: 'ยังตรวจสอบสถานะไม่ได้',
+  STALE: 'ข้อมูลสถานะล้าสมัย',
+};
+
+export function getThaiHealthStatus(status: string | null | undefined): string {
+  if (!status) return 'ยังตรวจสอบสถานะไม่ได้';
+  return THAI_HEALTH_STATUSES[status.toUpperCase()] ?? status;
+}
+
+
 
 

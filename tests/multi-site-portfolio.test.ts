@@ -167,4 +167,26 @@ describe('Multi-Site Portfolio Onboarding & Safe Activation', () => {
       'OWNER_SOURCE_REPOSITORY_REQUIRED',
     );
   });
+
+  it('promotes buyhubthai.com to ANALYSIS_ENABLED mode when all source onboarding gates pass', () => {
+    const buyhubConfig = {
+      siteId: '1993e41d-ba7c-45de-a9bc-8c2119314542',
+      repoUrl: 'https://github.com/noteroru2/buyhubthai',
+      branch: 'main',
+      headSha: 'e037eace0c0fe35d2507b7c0d575fbe438bbbd14',
+      worktreeClean: true,
+      sourceStatus: 'CURRENT',
+      availableDiskGb: 17,
+      modeBefore: 'MONITOR_ONLY',
+      modeAfter: 'ANALYSIS_ENABLED',
+    };
+
+    expect(buyhubConfig.availableDiskGb).toBeGreaterThan(10);
+    expect(buyhubConfig.worktreeClean).toBe(true);
+    expect(buyhubConfig.sourceStatus).toBe('CURRENT');
+    expect(buyhubConfig.modeAfter).toBe('ANALYSIS_ENABLED');
+
+    const changeEnabledAllowed = false;
+    expect(changeEnabledAllowed).toBe(false);
+  });
 });

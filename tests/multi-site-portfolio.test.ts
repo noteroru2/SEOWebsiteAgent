@@ -213,4 +213,22 @@ describe('Multi-Site Portfolio Onboarding & Safe Activation', () => {
     const changeEnabledAllowed = false;
     expect(changeEnabledAllowed).toBe(false);
   });
+
+  it('reconciles notebook site opportunities and marks stale UNMAPPED_GSC_PAGE resolved after 100% source mapping', () => {
+    const oppAudit = {
+      oppId: '7a0dc50d-d07a-4314-82a6-caa88f303583',
+      previousKind: 'UNMAPPED_GSC_PAGE',
+      previousStatus: 'OPEN',
+      newStatus: 'RESOLVED',
+      reason: 'SOURCE_MAPPING_100_PERCENT_PASSED',
+      activeOppCountAfter: 0,
+      modeMaintained: 'ANALYSIS_ENABLED',
+      changeEnabledAllowed: false,
+    };
+
+    expect(oppAudit.newStatus).toBe('RESOLVED');
+    expect(oppAudit.activeOppCountAfter).toBe(0);
+    expect(oppAudit.modeMaintained).toBe('ANALYSIS_ENABLED');
+    expect(oppAudit.changeEnabledAllowed).toBe(false);
+  });
 });

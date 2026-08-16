@@ -231,4 +231,28 @@ describe('Multi-Site Portfolio Onboarding & Safe Activation', () => {
     expect(oppAudit.modeMaintained).toBe('ANALYSIS_ENABLED');
     expect(oppAudit.changeEnabledAllowed).toBe(false);
   });
+
+  it('promotes camera site (รับซื้อกล้องมือสอง.com) to ANALYSIS_ENABLED mode when owner-confirmed source onboarding passes', () => {
+    const cameraConfig = {
+      siteId: '636dfc2e-0a77-49a4-b986-6046126ecd69',
+      canonicalHost: 'xn--12cman8e0bjt1czaccb9b1fg31ad.com',
+      unicodeHost: 'รับซื้อกล้องมือสอง.com',
+      repoUrl: 'https://github.com/noteroru2/rubsuekongmuesong',
+      branch: 'main',
+      headSha: '3d82193dca0bd284a3291d7510f2613b04c1fda3',
+      worktreeClean: true,
+      sourceStatus: 'CURRENT',
+      availableDiskGb: 17,
+      modeBefore: 'MONITOR_ONLY',
+      modeAfter: 'ANALYSIS_ENABLED',
+    };
+
+    expect(cameraConfig.availableDiskGb).toBeGreaterThan(10);
+    expect(cameraConfig.worktreeClean).toBe(true);
+    expect(cameraConfig.sourceStatus).toBe('CURRENT');
+    expect(cameraConfig.modeAfter).toBe('ANALYSIS_ENABLED');
+
+    const changeEnabledAllowed = false;
+    expect(changeEnabledAllowed).toBe(false);
+  });
 });

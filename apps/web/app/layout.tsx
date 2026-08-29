@@ -4,7 +4,8 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'SEO Website Agent',
-  description: 'Local-first SEO operations foundation',
+  description: 'Owner-operated SEO monitoring and review console',
+  robots: { index: false, follow: false },
 };
 const nav = [
   ['/', 'ภาพรวม'],
@@ -15,15 +16,16 @@ const nav = [
   ['/approvals', 'รออนุมัติ'],
 ] as const;
 export default function Layout({ children }: Readonly<{ children: React.ReactNode }>) {
+  const production = process.env.NODE_ENV === 'production';
   return (
-    <html lang="en">
+    <html lang="th">
       <body>
         <div className="shell">
           <aside>
             <div className="brand">
               <span className="mark">S</span>
               <div>
-                SEO Website Agent<small>Local pilot</small>
+                SEO Website Agent<small>{production ? 'Production' : 'Local development'}</small>
               </div>
             </div>
             <nav>
@@ -33,7 +35,9 @@ export default function Layout({ children }: Readonly<{ children: React.ReactNod
                 </Link>
               ))}
             </nav>
-            <div className="local">● Local environment</div>
+            <div className="local">
+              ● {production ? 'Production environment' : 'Local environment'}
+            </div>
           </aside>
           <main>{children}</main>
         </div>

@@ -125,6 +125,35 @@ vi.mock('@seo-agent/database', () => ({
     recentJobs: [],
     timingMs: 1,
   })),
+  ownerDashboardOverview: vi.fn(async () => ({
+    activeOpportunitiesCount: 1,
+    ownerInputRequiredCount: 0,
+    goldenPathCandidatesCount: 0,
+    patchApprovalRequiredCount: 0,
+    releaseAuthorizationRequiredCount: 0,
+    ownerActionCategory: 'NOTHING_REQUIRED',
+    latestWatchRun: null,
+    sitesPortfolio: [],
+    errors: [],
+    timingMs: 1,
+  })),
+  productionHealthSnapshot: vi.fn(async () => ({
+    status: 'HEALTHY',
+    gitSha: 'a'.repeat(40),
+    versionConfigured: true,
+    worker: { healthy: true, heartbeat: new Date() },
+    scheduler: {
+      enabled: true,
+      healthy: true,
+      heartbeat: new Date(),
+      timezone: 'Asia/Bangkok',
+      dailyAt: '09:15',
+    },
+    queue: { queued: 0, running: 0 },
+    migrations: { healthy: true, applied: 24, expected: 24 },
+    latestWatchRun: null,
+    checkedAt: new Date(),
+  })),
   databaseHealthy: vi.fn(async () => true),
   dashboardTopOpportunities: vi.fn(async () => ({
     rows: [
@@ -142,6 +171,9 @@ vi.mock('@seo-agent/database', () => ({
     rows: [{ id: '1', name: 'Demo Site', url: 'https://example.com', active: true }],
     timingMs: 1,
   })),
+  listDiscoveredGscProperties: vi.fn(async () => []),
+  getLatestOpportunityWatchRun: vi.fn(async () => null),
+  getGoldenPathCandidates: vi.fn(async () => []),
   listJobs: vi.fn(async () => ({ rows: [], timingMs: 1 })),
   enqueueJob: vi.fn(),
   createSite: vi.fn(),
@@ -305,9 +337,9 @@ describe('server-rendered UI foundations', () => {
   it('renders dashboard', async () => {
     const Page = (await import('../apps/web/app/page')).default;
     const html = renderToStaticMarkup(await Page());
-    expect(html).toContain('Dashboard');
-    expect(html).toContain('System health');
-    expect(html).toContain('Top Opportunities');
+    expect(html).toContain('ภาพรวมระบบ SEO Agent');
+    expect(html).toContain('สถานะระบบ');
+    expect(html).toContain('โอกาส SEO ล่าสุด');
   });
   it('renders site list', async () => {
     const Page = (await import('../apps/web/app/sites/page')).default;
@@ -317,7 +349,8 @@ describe('server-rendered UI foundations', () => {
   it('renders jobs list', async () => {
     const Page = (await import('../apps/web/app/jobs/page')).default;
     const html = renderToStaticMarkup(await Page());
-    expect(html).toContain('Enqueue SYSTEM_TEST');
+    expect(html).toContain('งานของระบบ');
+    expect(html).toContain('ทดสอบระบบ');
   });
   it('renders compact crawl summary and bounded issues', async () => {
     const Page = (await import('../apps/web/app/sites/[id]/page')).default;
@@ -337,9 +370,9 @@ describe('server-rendered UI foundations', () => {
   it('renders bounded opportunity overview and deterministic detail', async () => {
     const Overview = (await import('../apps/web/app/opportunities/page')).default;
     const overview = renderToStaticMarkup(await Overview({ searchParams: Promise.resolve({}) }));
-    expect(overview).toContain('SEO Opportunities');
-    expect(overview).toContain('STRIKING_DISTANCE_QUERY');
-    expect(overview).toContain('bounded to 100 records');
+    expect(overview).toContain('รายการโอกาส SEO');
+    expect(overview).toContain('คีย์เวิร์ดใกล้ขึ้นหน้าแรก');
+    expect(overview).toContain('โอกาสทั้งหมด: 1 รายการ');
 
     const Detail = (await import('../apps/web/app/opportunities/[id]/page')).default;
     const detail = renderToStaticMarkup(

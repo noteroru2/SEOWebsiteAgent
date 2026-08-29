@@ -226,6 +226,11 @@ export const envSchema = z.object({
   WORKER_ID: z.string().default('worker-local-1'),
   WORKER_POLL_MS: z.coerce.number().int().min(250).default(2000),
   STALE_JOB_MINUTES: z.coerce.number().int().min(1).default(15),
+  SCHEDULER_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  SCHEDULER_POLL_MS: z.coerce.number().int().min(60_000).default(60_000),
   APP_ENCRYPTION_KEY: z.string().optional(),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),

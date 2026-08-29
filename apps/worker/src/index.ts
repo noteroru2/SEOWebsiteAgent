@@ -1,4 +1,9 @@
-import { getDatabase, recordWorkerHeartbeat } from '@seo-agent/database';
+import {
+  enqueueDueOpportunityWatches,
+  getDatabase,
+  recordSchedulerFailure,
+  recordWorkerHeartbeat,
+} from '@seo-agent/database';
 import { envSchema } from '@seo-agent/shared';
 import { executeOne, recover } from './runner.js';
 
@@ -15,10 +20,21 @@ process.on('SIGINT', () => {
 await recover(db, env.STALE_JOB_MINUTES);
 console.log(`Worker ${env.WORKER_ID} started (heavy concurrency: 1).`);
 let nextHeartbeat = 0;
+let nextSchedulerPoll = 0;
 while (!stopping) {
   if (Date.now() >= nextHeartbeat) {
     await recordWorkerHeartbeat(env.WORKER_ID, db);
     nextHeartbeat = Date.now() + 30_000;
+  }
+  if (env.SCHEDULER_ENABLED && Date.now() >= nextSchedulerPoll) {
+    const checkedAt = new Date();
+    try {
+      await enqueueDueOpportunityWatches(checkedAt, pool);
+    } catch {
+      await recordSchedulerFailure(checkedAt, pool);
+      console.error('Daily opportunity scheduler failed.');
+    }
+    nextSchedulerPoll = Date.now() + env.SCHEDULER_POLL_MS;
   }
   const outcome = await executeOne(env.WORKER_ID, pool);
   if (outcome.state === 'IDLE' || outcome.state === 'RESOURCE_DENIED')

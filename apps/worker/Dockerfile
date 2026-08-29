@@ -10,7 +10,8 @@ COPY apps/worker ./apps/worker
 RUN npm run build -w @seo-agent/worker
 FROM node:22-alpine
 WORKDIR /app
-ENV NODE_ENV=production
+ARG APP_GIT_SHA=unknown
+ENV NODE_ENV=production APP_GIT_SHA=$APP_GIT_SHA
 RUN apk add --no-cache git chromium
 ENV PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium-browser
 COPY --from=build /app/node_modules ./node_modules

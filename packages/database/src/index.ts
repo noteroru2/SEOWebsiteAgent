@@ -38,6 +38,7 @@ export function getDatabase() {
 }
 
 export * from './opportunity-watch';
+export * from './production-scheduler';
 
 export async function createSite(input: unknown, database = getDatabase().db) {
   const value = createSiteSchema.parse(input);
@@ -580,6 +581,15 @@ export async function dashboardSummary(database = getDatabase().db) {
 
 export async function ownerDashboardOverview(pool = getDatabase().pool) {
   const started = performance.now();
+  const errors: string[] = [];
+  const safeQuery = async (name: string, query: string) => {
+    try {
+      return await pool.query(query);
+    } catch {
+      errors.push(name);
+      return { rows: [] };
+    }
+  };
   const [
     oppsRes,
     ownerInputRes,
@@ -589,13 +599,38 @@ export async function ownerDashboardOverview(pool = getDatabase().pool) {
     watchRunRes,
     sitesRes,
   ] = await Promise.all([
-    pool.query(`SELECT count(*)::int AS count FROM opportunities WHERE status = 'OPEN'`),
-    pool.query(`SELECT count(*)::int AS count FROM opportunities WHERE recommendation = 'OWNER_INPUT_REQUIRED' OR (data->'evidence_requirements'->'owner_input'->>'required')::boolean = true`),
-    pool.query(`SELECT count(*)::int AS count FROM golden_path_candidates WHERE status IN ('QUALIFIED', 'OWNER_REVIEW_AVAILABLE')`),
-    pool.query(`SELECT count(*)::int AS count FROM approvals WHERE status = 'PENDING' AND (kind = 'PATCH' OR kind IS NULL)`),
-    pool.query(`SELECT count(*)::int AS count FROM approvals WHERE status = 'PENDING' AND kind = 'RELEASE'`),
-    pool.query(`SELECT * FROM opportunity_watch_runs ORDER BY created_at DESC LIMIT 1`),
-    pool.query(`
+    safeQuery(
+      'active_opportunities',
+      `SELECT count(*)::int AS count FROM opportunities WHERE status = 'OPEN'`,
+    ),
+    safeQuery(
+      'owner_input_required',
+      `SELECT count(DISTINCT r.opportunity_id)::int AS count
+       FROM evidence_requests r
+       JOIN opportunities o ON o.id = r.opportunity_id
+       WHERE r.required = true AND r.status = 'OPEN' AND o.status = 'OPEN'
+         AND (left(r.type, 6) = 'OWNER_' OR r.type = 'MANUAL_SERP_OBSERVATION')`,
+    ),
+    safeQuery(
+      'golden_path_candidates',
+      `SELECT count(*)::int AS count FROM golden_path_candidates WHERE status IN ('QUALIFIED', 'OWNER_REVIEW_AVAILABLE')`,
+    ),
+    safeQuery(
+      'patch_approvals',
+      `SELECT count(*)::int AS count FROM patch_workflows
+       WHERE status IN ('REVIEW_REQUIRED', 'PREVIEW_READY')`,
+    ),
+    safeQuery(
+      'release_approvals',
+      `SELECT count(*)::int AS count FROM patch_workflows WHERE status = 'RELEASE_READY'`,
+    ),
+    safeQuery(
+      'latest_watch_run',
+      `SELECT * FROM opportunity_watch_runs ORDER BY created_at DESC LIMIT 1`,
+    ),
+    safeQuery(
+      'sites_portfolio',
+      `
       SELECT 
         s.id, 
         s.name, 
@@ -607,12 +642,22 @@ export async function ownerDashboardOverview(pool = getDatabase().pool) {
         COALESCE(s.stagger_minute, 0) AS stagger_minute,
         (SELECT count(*)::int FROM opportunities WHERE site_id = s.id AND status = 'OPEN') AS opp_count,
         (SELECT count(*)::int FROM golden_path_candidates WHERE site_id = s.id AND status IN ('QUALIFIED', 'OWNER_REVIEW_AVAILABLE')) AS candidate_count,
-        (SELECT count(*)::int FROM opportunities WHERE site_id = s.id AND (recommendation = 'OWNER_INPUT_REQUIRED' OR (data->'evidence_requirements'->'owner_input'->>'required')::boolean = true)) AS owner_input_count,
-        (SELECT count(*)::int FROM approvals WHERE site_id = s.id AND status = 'PENDING') AS approval_count,
-        (SELECT created_at FROM system_events WHERE site_id = s.id AND event = 'GSC_SYNC_SUCCESS' ORDER BY created_at DESC LIMIT 1) AS last_gsc_sync_at
+        (SELECT count(DISTINCT r.opportunity_id)::int
+         FROM evidence_requests r
+         JOIN opportunities o ON o.id = r.opportunity_id
+         WHERE o.site_id = s.id AND o.status = 'OPEN' AND r.required = true AND r.status = 'OPEN'
+           AND (left(r.type, 6) = 'OWNER_' OR r.type = 'MANUAL_SERP_OBSERVATION')) AS owner_input_count,
+        ((SELECT count(*)::int FROM approvals WHERE site_id = s.id AND status = 'PENDING')
+         + (SELECT count(*)::int FROM patch_workflows
+            WHERE site_id = s.id
+              AND status IN ('REVIEW_REQUIRED', 'PREVIEW_READY', 'RELEASE_READY'))) AS approval_count,
+        (SELECT finished_at FROM gsc_sync_runs
+         WHERE site_id = s.id AND status = 'SUCCEEDED'
+         ORDER BY finished_at DESC NULLS LAST LIMIT 1) AS last_gsc_sync_at
       FROM sites s
       ORDER BY s.name ASC
-    `),
+    `,
+    ),
   ]);
 
   const activeOpportunitiesCount = oppsRes.rows[0]?.count ?? 0;
@@ -642,6 +687,7 @@ export async function ownerDashboardOverview(pool = getDatabase().pool) {
     ownerActionCategory,
     latestWatchRun,
     sitesPortfolio: sitesRes.rows,
+    errors,
     timingMs: performance.now() - started,
   };
 }

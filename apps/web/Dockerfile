@@ -10,7 +10,8 @@ COPY apps/web ./apps/web
 RUN npm run build -w @seo-agent/web
 FROM node:22-alpine
 WORKDIR /app
-ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0
+ARG APP_GIT_SHA=unknown
+ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0 APP_GIT_SHA=$APP_GIT_SHA
 COPY --from=build /app/apps/web/.next/standalone ./
 COPY --from=build /app/apps/web/.next/static ./apps/web/.next/static
 CMD ["node", "apps/web/server.js"]

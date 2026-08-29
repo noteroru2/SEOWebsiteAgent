@@ -36,6 +36,7 @@ import { requireTestDatabaseUrl, resetTestDatabase } from '../packages/database/
 
 const database = createDatabase(requireTestDatabaseUrl());
 let opportunityId = '';
+afterAll(async () => database.pool.end());
 
 function context(route: string, path: string, lines: number, characters = 1000): SourceContext {
   const text = Array.from({ length: lines }, (_, index) => `${index + 1} | line ${index + 1}`)
@@ -87,8 +88,6 @@ describe('Batch 6.4 deterministic evidence resolution', () => {
       )
     ).rows[0].id;
   });
-  afterAll(async () => database.pool.end());
-
   it('derives the previous equal-size finalized window without hardcoding dates', () =>
     expect(equalGscWindows('2026-08-08')).toEqual({
       current: { start: '2026-07-12', end: '2026-08-08', days: 28 },
@@ -761,9 +760,12 @@ describe('Batch 6.4 deterministic evidence resolution', () => {
 
 describe('submitOwnerLocalObservation', () => {
   it('submits owner local observation for an open evidence request with server-assigned provenance', async () => {
-    const site = await createSite({ name: 'Owner Observation Test', url: 'https://test-observation.co.th/' });
+    const site = await createSite({
+      name: 'Owner Observation Test',
+      url: 'https://test-observation.co.th/',
+    });
     const oppRes = await database.pool.query(
-      `INSERT INTO opportunities(site_id, kind, title, summary, query) VALUES($1, 'QUERY_PAGE_OVERLAP_CANDIDATE', 'Test Title', 'Test Summary', 'ร้านรับซื้อโน๊ตบุ๊ค ใกล้ฉัน') RETURNING id`,
+      `INSERT INTO opportunities(site_id, kind, title, summary, query, fingerprint) VALUES($1, 'QUERY_PAGE_OVERLAP_CANDIDATE', 'Test Title', 'Test Summary', 'ร้านรับซื้อโน๊ตบุ๊ค ใกล้ฉัน', 'owner-observation-test') RETURNING id`,
       [site.id],
     );
     const oppId = oppRes.rows[0].id;
@@ -786,7 +788,7 @@ describe('submitOwnerLocalObservation', () => {
         },
         database.pool,
       ),
-    ).rejects.toThrow('Open evidence request required for this opportunity');
+    ).rejects.toThrow('Evidence request not found for this opportunity');
 
     // Invalid device should be rejected
     await expect(
@@ -828,7 +830,9 @@ describe('submitOwnerLocalObservation', () => {
     expect(item.evidence.organicRank).toBe(2);
 
     // Request status updated to RESOLVED
-    const reqCheck = await database.pool.query(`SELECT status FROM evidence_requests WHERE id=$1`, [reqId]);
+    const reqCheck = await database.pool.query(`SELECT status FROM evidence_requests WHERE id=$1`, [
+      reqId,
+    ]);
     expect(reqCheck.rows[0].status).toBe('RESOLVED');
 
     // Audit event logged with level='INFO'
@@ -858,16 +862,22 @@ describe('submitOwnerLocalObservation', () => {
 
     expect(dupItem.id).toBe(item.id);
 
-    const itemsCount = await database.pool.query(`SELECT COUNT(*)::int FROM evidence_items WHERE request_id=$1`, [reqId]);
+    const itemsCount = await database.pool.query(
+      `SELECT COUNT(*)::int FROM evidence_items WHERE request_id=$1`,
+      [reqId],
+    );
     expect(itemsCount.rows[0].count).toBe(1);
   });
 });
 
 describe('evaluateAiAnalysisEligibility', () => {
   it('blocks AI analysis when required evidence is unresolved or source understanding is not refreshed', async () => {
-    const site = await createSite({ name: 'Eligibility Test Site', url: 'https://eligibility-test.co.th/' });
+    const site = await createSite({
+      name: 'Eligibility Test Site',
+      url: 'https://eligibility-test.co.th/',
+    });
     const oppRes = await database.pool.query(
-      `INSERT INTO opportunities(site_id, kind, title, summary, query) VALUES($1, 'QUERY_PAGE_OVERLAP_CANDIDATE', 'Test Title', 'Test Summary', 'ร้านรับซื้อโน๊ตบุ๊ค ใกล้ฉัน') RETURNING id`,
+      `INSERT INTO opportunities(site_id, kind, title, summary, query, fingerprint) VALUES($1, 'QUERY_PAGE_OVERLAP_CANDIDATE', 'Test Title', 'Test Summary', 'ร้านรับซื้อโน๊ตบุ๊ค ใกล้ฉัน', 'eligibility-unresolved-test') RETURNING id`,
       [site.id],
     );
     const oppId = oppRes.rows[0].id;
@@ -902,9 +912,12 @@ describe('evaluateAiAnalysisEligibility', () => {
   });
 
   it('blocks AI analysis when source HEAD is unknown or unmapped', async () => {
-    const site = await createSite({ name: 'Source Gate Test Site', url: 'https://source-test.co.th/' });
+    const site = await createSite({
+      name: 'Source Gate Test Site',
+      url: 'https://source-test.co.th/',
+    });
     const oppRes = await database.pool.query(
-      `INSERT INTO opportunities(site_id, kind, title, summary, query, url) VALUES($1, 'DECLINING_PAGE', 'Source Test Title', 'Test Summary', 'test query', 'https://source-test.co.th/page') RETURNING id`,
+      `INSERT INTO opportunities(site_id, kind, title, summary, query, url, fingerprint) VALUES($1, 'DECLINING_PAGE', 'Source Test Title', 'Test Summary', 'test query', 'https://source-test.co.th/page', 'eligibility-source-test') RETURNING id`,
       [site.id],
     );
     const oppId = oppRes.rows[0].id;
@@ -927,5 +940,3 @@ describe('evaluateAiAnalysisEligibility', () => {
     }
   });
 });
-
-

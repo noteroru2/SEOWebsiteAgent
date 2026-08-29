@@ -41,7 +41,7 @@ const guard = new ResourceGuard(
   {
     collect: async () => ({
       freeMemoryMb: 2000,
-      freeDiskMb: 10_000,
+      freeDiskMb: 20_000,
       loadPerCpu: 0,
       platform: 'linux',
     }),

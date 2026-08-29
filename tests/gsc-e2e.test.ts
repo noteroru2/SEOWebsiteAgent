@@ -29,7 +29,7 @@ describe('GSC fake full pipeline', () => {
     {
       collect: async () => ({
         freeMemoryMb: 2000,
-        freeDiskMb: 10000,
+        freeDiskMb: 20000,
         loadPerCpu: 0,
         platform: 'linux',
       }),

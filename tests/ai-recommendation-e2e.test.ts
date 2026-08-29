@@ -19,7 +19,7 @@ const guard = new ResourceGuard(
   {
     collect: async () => ({
       freeMemoryMb: 2000,
-      freeDiskMb: 10_000,
+      freeDiskMb: 20_000,
       loadPerCpu: 0,
       platform: 'linux',
     }),
@@ -72,6 +72,22 @@ async function seed() {
     ],
   );
   opportunityId = opportunity.rows[0].id;
+  const repository = await database.pool.query(
+    `INSERT INTO site_repositories(
+       site_id,local_path,repository_type,enabled,head_sha,current_branch,
+       worktree_clean,last_refreshed_at
+     ) VALUES($1,'/fixtures/ai-source','LOCAL_GIT',true,$2,'main',true,now())
+     RETURNING id`,
+    [siteId, 'a'.repeat(40)],
+  );
+  await database.pool.query(
+    `INSERT INTO source_route_mappings(
+       site_id,repository_id,route_url,route_path,mapping_status,primary_source_path,
+       repository_head_sha
+     ) VALUES($1,$2,'https://ai.example.com/page','/page','EXACT_STATIC_ROUTE',
+       'src/pages/page.astro',$3)`,
+    [siteId, repository.rows[0].id, 'a'.repeat(40)],
+  );
 }
 
 async function run(provider: FakeAiProvider, reanalyze = false) {

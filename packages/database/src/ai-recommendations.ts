@@ -389,10 +389,13 @@ export async function evaluateAiAnalysisEligibility(
   );
 
   const evidencePanel = await evidencePanelForOpportunity(opportunityId, pool);
-  const openRequests = evidencePanel.requests.filter((r: Record<string, unknown>) => r.status === 'OPEN');
-  const evidenceRequired =
-    openRequests.length > 0 ||
-    evidencePanel.completeness !== 'READY_FOR_REEVALUATION';
+  const openRequests = evidencePanel.requests.filter(
+    (r: Record<string, unknown>) => r.status === 'OPEN',
+  );
+  const evidenceComplete = ['READY_FOR_REEVALUATION', 'INTERNALLY_RESOLVED'].includes(
+    evidencePanel.completeness,
+  );
+  const evidenceRequired = openRequests.length > 0 || !evidenceComplete;
 
   const sourcePanel = await sourcePanelForOpportunity(opportunityId, pool);
   const oppRes = await pool.query(
@@ -415,7 +418,10 @@ export async function evaluateAiAnalysisEligibility(
   } else if (!oppRow.head_sha || oppRow.head_sha === '—') {
     sourceHeadMissing = true;
     sourceStatus = 'HEAD_UNKNOWN';
-  } else if (!sourcePanel.mapping || !(sourcePanel.mapping as Record<string, unknown>).primary_source_path) {
+  } else if (
+    !sourcePanel.mapping ||
+    !(sourcePanel.mapping as Record<string, unknown>).primary_source_path
+  ) {
     sourceMappingRequired = true;
     sourceStatus = 'UNMAPPED';
   } else {
@@ -425,7 +431,9 @@ export async function evaluateAiAnalysisEligibility(
   const reasons: string[] = [];
   if (evidenceRequired) {
     if (openRequests.length > 0) {
-      const openReqTypes = openRequests.map((r: Record<string, unknown>) => String(r.type)).join(', ');
+      const openReqTypes = openRequests
+        .map((r: Record<string, unknown>) => String(r.type))
+        .join(', ');
       reasons.push(`Required owner evidence is missing (${openReqTypes} request open).`);
     } else {
       reasons.push(`Required evidence incomplete (${evidencePanel.completeness}).`);
@@ -438,7 +446,9 @@ export async function evaluateAiAnalysisEligibility(
     reasons.push('Source repository HEAD SHA is unknown.');
   }
   if (sourceMappingRequired) {
-    reasons.push('Source mapping required: Opportunity target page is not mapped to a repository source file.');
+    reasons.push(
+      'Source mapping required: Opportunity target page is not mapped to a repository source file.',
+    );
   }
   if (!providerConfigured) {
     reasons.push('OPENAI_API_KEY is not configured on the server.');
@@ -506,9 +516,7 @@ export async function aiPanelForOpportunity(
   return {
     latest: latest.rows[0] ?? null,
     activeJob: active.rows[0] ?? null,
-    configured: Boolean(
-      process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim() !== '',
-    ),
+    configured: Boolean(process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim() !== ''),
     eligibility,
   };
 }

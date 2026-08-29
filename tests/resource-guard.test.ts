@@ -12,7 +12,7 @@ describe('resource guard', () => {
   it('allows work when resources exceed thresholds', async () => {
     const guard = new ResourceGuard(
       {},
-      collector({ freeMemoryMb: 2048, freeDiskMb: 10000, loadPerCpu: 0.2, platform: 'linux' }),
+      collector({ freeMemoryMb: 2048, freeDiskMb: 20000, loadPerCpu: 0.2, platform: 'linux' }),
     );
     expect((await guard.evaluate()).allowed).toBe(true);
     expect(guard.config.heavyJobConcurrency).toBe(1);
@@ -27,7 +27,7 @@ describe('resource guard', () => {
   it('does not fail Windows because load average is unavailable', async () => {
     const guard = new ResourceGuard(
       {},
-      collector({ freeMemoryMb: 2048, freeDiskMb: 10000, loadPerCpu: null, platform: 'win32' }),
+      collector({ freeMemoryMb: 2048, freeDiskMb: 20000, loadPerCpu: null, platform: 'win32' }),
     );
     expect((await guard.evaluate()).allowed).toBe(true);
   });

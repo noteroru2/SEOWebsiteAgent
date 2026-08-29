@@ -22,7 +22,7 @@ suite('SYSTEM_TEST end-to-end smoke', () => {
       {
         collect: async () => ({
           freeMemoryMb: 2000,
-          freeDiskMb: 10000,
+          freeDiskMb: 20000,
           loadPerCpu: 0,
           platform: 'linux',
         }),
@@ -69,7 +69,7 @@ describe('SITE_CRAWL queue integration', () => {
       {
         collect: async () => ({
           freeMemoryMb: 2000,
-          freeDiskMb: 10000,
+          freeDiskMb: 20000,
           loadPerCpu: 0,
           platform: 'linux',
         }),

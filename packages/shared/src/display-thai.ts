@@ -1,7 +1,4 @@
-export const THAI_OPPORTUNITY_TYPES: Record<
-  string,
-  { title: string; description: string }
-> = {
+export const THAI_OPPORTUNITY_TYPES: Record<string, { title: string; description: string }> = {
   STRIKING_DISTANCE_QUERY: {
     title: 'คีย์เวิร์ดใกล้ขึ้นหน้าแรก',
     description: 'คำค้นนี้มีอันดับอยู่ในช่วงที่อาจพัฒนาให้ดีขึ้นได้',
@@ -113,15 +110,17 @@ export function formatThaiDateTime(dateInput: string | Date | null | undefined) 
   const d = new Date(dateInput);
   if (Number.isNaN(d.getTime())) return String(dateInput);
 
-  return new Intl.DateTimeFormat('th-TH', {
-    timeZone: 'Asia/Bangkok',
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(d) + ' น.';
+  return (
+    new Intl.DateTimeFormat('th-TH', {
+      timeZone: 'Asia/Bangkok',
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(d) + ' น.'
+  );
 }
 
 export const THAI_SITE_ROLES: Record<string, string> = {
@@ -174,9 +173,8 @@ export function formatOwnerDomainName(rawInput: string | null | undefined): stri
     .replace(/^sc-domain:/i, '');
 
   try {
-    const { domainToUnicode } = require('node:url');
     const unicode = domainToUnicode(host);
-    return unicode.normalize('NFC');
+    return (unicode || host).normalize('NFC');
   } catch {
     return host;
   }
@@ -185,7 +183,7 @@ export function formatOwnerDomainName(rawInput: string | null | undefined): stri
 export function formatCoveragePercentage(
   numerator: number | null | undefined,
   denominator: number | null | undefined,
-  fallbackText = 'ยังไม่มีข้อมูลให้วัด'
+  fallbackText = 'ยังไม่มีข้อมูลให้วัด',
 ): string {
   const num = Number(numerator || 0);
   const den = Number(denominator || 0);
@@ -211,6 +209,4 @@ export function getThaiHealthStatus(status: string | null | undefined): string {
   return THAI_HEALTH_STATUSES[status.toUpperCase()] ?? status;
 }
 
-
-
-
+import { domainToUnicode } from 'node:url';

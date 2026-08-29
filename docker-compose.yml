@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: seo_agent
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_only_change_me}
     ports:
-      - '55432:5432'
+      - '127.0.0.1:55432:5432'
     volumes:
       - seo_agent_db:/var/lib/postgresql/data
     healthcheck:
@@ -21,8 +21,10 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        APP_GIT_SHA: ${APP_GIT_SHA:-development}
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://seo_agent:local_only_change_me@postgres:5432/seo_agent}
+      DATABASE_URL: postgresql://seo_agent:local_only_change_me@postgres:5432/seo_agent
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:3000/api/google/callback}
@@ -35,14 +37,20 @@ services:
       SERPSTACK_API_KEY: ${SERPSTACK_API_KEY:-}
       SERPER_API_KEY: ${SERPER_API_KEY:-}
       SERP_BILLING_MODE: ${SERP_BILLING_MODE:-FREE_ONLY}
+      APP_GIT_SHA: ${APP_GIT_SHA:-development}
+      EXPECTED_MIGRATION_COUNT: ${EXPECTED_MIGRATION_COUNT:-24}
+      SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-false}
+      OWNER_AUTH_REQUIRED: ${OWNER_AUTH_REQUIRED:-true}
+      OWNER_AUTH_USERNAME: ${OWNER_AUTH_USERNAME:-}
+      OWNER_AUTH_PASSWORD: ${OWNER_AUTH_PASSWORD:-}
     ports:
-      - '3000:3000'
+      - '127.0.0.1:3000:3000'
     volumes:
       - serp_artifacts:/app/artifacts/serp:ro
     depends_on:
       migrate: { condition: service_completed_successfully }
     healthcheck:
-      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3000/api/health']
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3000/api/health?scope=live']
       interval: 10s
       timeout: 3s
       retries: 12
@@ -58,8 +66,10 @@ services:
     build:
       context: .
       dockerfile: apps/worker/Dockerfile
+      args:
+        APP_GIT_SHA: ${APP_GIT_SHA:-development}
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://seo_agent:local_only_change_me@postgres:5432/seo_agent}
+      DATABASE_URL: postgresql://seo_agent:local_only_change_me@postgres:5432/seo_agent
       WORKER_ID: worker-compose-1
       HEAVY_JOB_CONCURRENCY: 1
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
@@ -96,6 +106,9 @@ services:
       SERPER_API_KEY: ${SERPER_API_KEY:-}
       SERP_BILLING_MODE: ${SERP_BILLING_MODE:-FREE_ONLY}
       SERP_API_TIMEOUT_MS: ${SERP_API_TIMEOUT_MS:-15000}
+      APP_GIT_SHA: ${APP_GIT_SHA:-development}
+      SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-false}
+      SCHEDULER_POLL_MS: ${SCHEDULER_POLL_MS:-60000}
     volumes:
       - type: bind
         source: ${SOURCE_REPO_HOST_ROOT:?SOURCE_REPO_HOST_ROOT is required for the worker}
@@ -109,7 +122,7 @@ services:
     healthcheck:
       test: ['CMD', 'node', 'dist/healthcheck.js']
       interval: 15s
-      timeout: 5s
+      timeout: 15s
       retries: 4
     deploy:
       resources:
@@ -125,7 +138,7 @@ services:
       dockerfile: apps/worker/Dockerfile
     command: ['node', 'dist/migrate.js']
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://seo_agent:local_only_change_me@postgres:5432/seo_agent}
+      DATABASE_URL: postgresql://seo_agent:local_only_change_me@postgres:5432/seo_agent
     depends_on:
       postgres: { condition: service_healthy }
     restart: 'no'

@@ -1,10 +1,11 @@
 services:
   postgres:
     image: postgres:17-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: seo_agent
       POSTGRES_USER: seo_agent
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_only_change_me}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     ports:
       - '127.0.0.1:55432:5432'
     volumes:
@@ -18,13 +19,14 @@ services:
       resources:
         limits: { cpus: '0.75', memory: 512M }
   web:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: apps/web/Dockerfile
       args:
         APP_GIT_SHA: ${APP_GIT_SHA:-development}
     environment:
-      DATABASE_URL: postgresql://seo_agent:local_only_change_me@postgres:5432/seo_agent
+      DATABASE_URL: ${CONTAINER_DATABASE_URL:?CONTAINER_DATABASE_URL is required}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:3000/api/google/callback}
@@ -50,7 +52,7 @@ services:
     depends_on:
       migrate: { condition: service_completed_successfully }
     healthcheck:
-      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3000/api/health?scope=live']
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3000/api/health/live']
       interval: 10s
       timeout: 3s
       retries: 12
@@ -63,13 +65,14 @@ services:
         max-size: '20m'
         max-file: '3'
   worker:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: apps/worker/Dockerfile
       args:
         APP_GIT_SHA: ${APP_GIT_SHA:-development}
     environment:
-      DATABASE_URL: postgresql://seo_agent:local_only_change_me@postgres:5432/seo_agent
+      DATABASE_URL: ${CONTAINER_DATABASE_URL:?CONTAINER_DATABASE_URL is required}
       WORKER_ID: worker-compose-1
       HEAVY_JOB_CONCURRENCY: 1
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
@@ -138,7 +141,7 @@ services:
       dockerfile: apps/worker/Dockerfile
     command: ['node', 'dist/migrate.js']
     environment:
-      DATABASE_URL: postgresql://seo_agent:local_only_change_me@postgres:5432/seo_agent
+      DATABASE_URL: ${CONTAINER_DATABASE_URL:?CONTAINER_DATABASE_URL is required}
     depends_on:
       postgres: { condition: service_healthy }
     restart: 'no'

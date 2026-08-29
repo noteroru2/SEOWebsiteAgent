@@ -105,13 +105,24 @@ export async function recordSchedulerFailure(
 }
 
 export async function productionHealthSnapshot(
-  options: { schedulerEnabled?: boolean; expectedMigrationCount?: number; now?: Date } = {},
+  options: {
+    schedulerEnabled?: boolean;
+    expectedMigrationCount?: number;
+    staleJobMinutes?: number;
+    now?: Date;
+  } = {},
   pool: Pool = getDatabase().pool,
 ) {
   const now = options.now ?? new Date();
   const schedulerEnabled = options.schedulerEnabled ?? process.env.SCHEDULER_ENABLED === 'true';
   const expectedMigrationCount =
     options.expectedMigrationCount ?? Number(process.env.EXPECTED_MIGRATION_COUNT ?? 24);
+  const configuredStaleJobMinutes =
+    options.staleJobMinutes ?? Number(process.env.STALE_JOB_MINUTES ?? 15);
+  const staleJobMinutes =
+    Number.isFinite(configuredStaleJobMinutes) && configuredStaleJobMinutes > 0
+      ? configuredStaleJobMinutes
+      : 15;
   const result = await pool.query(
     `SELECT
        (SELECT max(created_at) FROM system_events WHERE source = 'worker' AND event = 'HEARTBEAT') AS worker_heartbeat,
@@ -119,7 +130,12 @@ export async function productionHealthSnapshot(
        (SELECT max(created_at) FROM opportunity_watch_runs) AS latest_watch_run,
        (SELECT count(*)::int FROM jobs WHERE status = 'QUEUED') AS queued,
        (SELECT count(*)::int FROM jobs WHERE status = 'RUNNING') AS running,
+       (SELECT count(*)::int FROM jobs
+        WHERE status = 'RUNNING'
+          AND COALESCE(heartbeat_at, started_at, updated_at)
+            < $1::timestamptz - make_interval(mins => $2)) AS stale_running,
        (SELECT count(*)::int FROM drizzle.__drizzle_migrations) AS migration_count`,
+    [now.toISOString(), staleJobMinutes],
   );
   const row = result.rows[0] ?? {};
   const workerHeartbeat = row.worker_heartbeat ? new Date(row.worker_heartbeat) : null;
@@ -127,29 +143,39 @@ export async function productionHealthSnapshot(
   const workerHealthy = Boolean(
     workerHeartbeat && now.getTime() - workerHeartbeat.getTime() <= 90_000,
   );
-  const schedulerHealthy = Boolean(
-    schedulerEnabled &&
-    schedulerHeartbeat &&
-    now.getTime() - schedulerHeartbeat.getTime() <= 180_000,
-  );
+  const schedulerHealthy =
+    !schedulerEnabled ||
+    Boolean(schedulerHeartbeat && now.getTime() - schedulerHeartbeat.getTime() <= 180_000);
   const migrationCount = Number(row.migration_count ?? 0);
   const migrationHealthy =
     Number.isInteger(expectedMigrationCount) && migrationCount === expectedMigrationCount;
   const gitSha = process.env.APP_GIT_SHA?.trim() || 'unknown';
+  const versionConfigured = /^[a-f0-9]{40}$/i.test(gitSha);
+  const staleRunning = Number(row.stale_running ?? 0);
+  const queueHealthy = staleRunning === 0;
 
   return {
-    status: workerHealthy && schedulerHealthy && migrationHealthy ? 'HEALTHY' : 'DEGRADED',
+    status:
+      workerHealthy && schedulerHealthy && queueHealthy && migrationHealthy && versionConfigured
+        ? 'HEALTHY'
+        : 'DEGRADED',
     gitSha,
-    versionConfigured: /^[a-f0-9]{40}$/i.test(gitSha),
+    versionConfigured,
     worker: { healthy: workerHealthy, heartbeat: workerHeartbeat },
     scheduler: {
       enabled: schedulerEnabled,
+      required: schedulerEnabled,
       healthy: schedulerHealthy,
       heartbeat: schedulerHeartbeat,
       timezone: PRODUCTION_TIMEZONE,
       dailyAt: '09:15',
     },
-    queue: { queued: Number(row.queued ?? 0), running: Number(row.running ?? 0) },
+    queue: {
+      healthy: queueHealthy,
+      queued: Number(row.queued ?? 0),
+      running: Number(row.running ?? 0),
+      staleRunning,
+    },
     migrations: {
       healthy: migrationHealthy,
       applied: migrationCount,

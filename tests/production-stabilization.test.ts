@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { readFile } from 'node:fs/promises';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import {
   createDatabase,
@@ -8,6 +9,8 @@ import {
   productionHealthSnapshot,
 } from '@seo-agent/database';
 import { validOwnerBasicAuthorization } from '../apps/web/lib/owner-auth';
+import { GET as liveHealth } from '../apps/web/app/api/health/live/route';
+import { config as proxyConfig } from '../apps/web/proxy';
 import { requireTestDatabaseUrl, resetTestDatabase } from '../packages/database/src/test-safety';
 
 const database = createDatabase(requireTestDatabaseUrl());
@@ -33,6 +36,38 @@ describe('production stabilization', () => {
       ),
     ).toBe(true);
     expect(validOwnerBasicAuthorization(null, { required: false })).toBe(true);
+  });
+
+  it('exposes only process liveness on the public health route', async () => {
+    const response = liveHealth();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: 'ok' });
+    expect(proxyConfig.matcher[0]).toContain('api/health/live');
+    expect(proxyConfig.matcher[0]).not.toContain('api/health|');
+  });
+
+  it('keeps container database credentials mandatory and host tooling separate', async () => {
+    const compose = await readFile('docker-compose.yml', 'utf8');
+    expect(compose).toContain(
+      'DATABASE_URL: ${CONTAINER_DATABASE_URL:?CONTAINER_DATABASE_URL is required}',
+    );
+    expect(compose).toContain(
+      'POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}',
+    );
+    expect(compose).not.toContain(
+      'DATABASE_URL: postgresql://seo_agent:local_only_change_me@postgres:5432/seo_agent',
+    );
+    expect(compose.match(/restart: unless-stopped/g)).toHaveLength(3);
+    expect(compose).toMatch(/migrate:[\s\S]*restart: 'no'/);
+  });
+
+  it('checks pg_dump before publishing an atomic compressed backup', async () => {
+    const script = await readFile('scripts/backup-postgres.sh', 'utf8');
+    expect(script).not.toMatch(/pg_dump[^\n]*\|[^\n]*gzip/);
+    expect(script).toContain('pg_dump -U "$user" "$database" > "$temporary_dump"');
+    expect(script).toContain('gzip -t "$temporary_archive"');
+    expect(script).toContain('mv "$temporary_archive" "$archive"');
+    expect(script).toContain('trap cleanup EXIT HUP INT TERM');
   });
 
   it('derives owner-input counts from open owner evidence requests', async () => {
@@ -119,7 +154,31 @@ describe('production stabilization', () => {
       expect(health.versionConfigured).toBe(true);
       expect(health.worker.healthy).toBe(true);
       expect(health.scheduler.healthy).toBe(true);
+      expect(health.queue).toEqual({ healthy: true, queued: 0, running: 0, staleRunning: 0 });
       expect(health.migrations).toEqual({ healthy: true, applied: 24, expected: 24 });
+
+      await database.pool.query(
+        `DELETE FROM system_events WHERE source='scheduler' AND event='SCHEDULER_TICK'`,
+      );
+      const disabledScheduler = await productionHealthSnapshot(
+        { schedulerEnabled: false, expectedMigrationCount: 24, now },
+        database.pool,
+      );
+      expect(disabledScheduler.status).toBe('HEALTHY');
+      expect(disabledScheduler.scheduler).toMatchObject({
+        enabled: false,
+        required: false,
+        healthy: true,
+        heartbeat: null,
+      });
+
+      process.env.APP_GIT_SHA = 'development';
+      const invalidVersion = await productionHealthSnapshot(
+        { schedulerEnabled: true, expectedMigrationCount: 24, now },
+        database.pool,
+      );
+      expect(invalidVersion.status).toBe('DEGRADED');
+      expect(invalidVersion.versionConfigured).toBe(false);
     } finally {
       if (previousSha === undefined) delete process.env.APP_GIT_SHA;
       else process.env.APP_GIT_SHA = previousSha;

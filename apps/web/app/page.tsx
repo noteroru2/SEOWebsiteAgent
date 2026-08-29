@@ -108,10 +108,19 @@ export default async function Dashboard() {
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '24px', fontSize: '0.9rem' }}>
           <div>
             <span style={{ opacity: 0.7 }}>สถานะตรวจติดตาม: </span>
-            <strong style={{ color: runtimeHealth?.scheduler.healthy ? '#4ade80' : '#f59e0b' }}>
-              {runtimeHealth?.scheduler.healthy
-                ? 'ทำงานอัตโนมัติประจำวัน'
-                : 'ระบบอัตโนมัติยังไม่พร้อม'}
+            <strong
+              style={{
+                color:
+                  runtimeHealth?.scheduler.enabled && runtimeHealth.scheduler.healthy
+                    ? '#4ade80'
+                    : '#f59e0b',
+              }}
+            >
+              {!runtimeHealth?.scheduler.enabled
+                ? 'ปิดอยู่ — ไม่สร้างงานอัตโนมัติ'
+                : runtimeHealth.scheduler.healthy
+                  ? 'ทำงานอัตโนมัติประจำวัน'
+                  : 'ระบบอัตโนมัติยังไม่พร้อม'}
             </strong>
           </div>
           <div>
@@ -392,21 +401,23 @@ export default async function Dashboard() {
             />
             <Health
               label="คิวงาน"
-              status={runtimeHealth ? 'HEALTHY' : 'UNKNOWN'}
+              status={
+                runtimeHealth?.queue.healthy ? 'HEALTHY' : runtimeHealth ? 'STALE' : 'UNKNOWN'
+              }
               text={
                 runtimeHealth
-                  ? `${runtimeHealth.queue.queued} รอ / ${runtimeHealth.queue.running} ทำงาน`
+                  ? `${runtimeHealth.queue.queued} รอ / ${runtimeHealth.queue.running} ทำงาน / ${runtimeHealth.queue.staleRunning} ค้าง`
                   : undefined
               }
             />
             <Health
               label="งานอัตโนมัติ"
               status={
-                runtimeHealth?.scheduler.healthy
-                  ? 'HEALTHY'
-                  : runtimeHealth?.scheduler.enabled
-                    ? 'STALE'
-                    : 'FAILED'
+                !runtimeHealth?.scheduler.enabled
+                  ? 'UNKNOWN'
+                  : runtimeHealth.scheduler.healthy
+                    ? 'HEALTHY'
+                    : 'STALE'
               }
             />
             <Health

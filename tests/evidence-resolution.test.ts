@@ -796,7 +796,7 @@ describe('submitOwnerLocalObservation', () => {
         {
           requestId: reqId,
           opportunityId: oppId,
-          device: 'INVALID' as any,
+          device: 'INVALID' as 'DESKTOP',
           location: 'Ubon',
           status: 'FOUND',
           resultType: 'ORGANIC',
@@ -883,7 +883,7 @@ describe('evaluateAiAnalysisEligibility', () => {
     const oppId = oppRes.rows[0].id;
 
     // Create open evidence request
-    const reqRes = await database.pool.query(
+    await database.pool.query(
       `INSERT INTO evidence_requests(opportunity_id, type, requirement, reason, source, status) VALUES($1, 'OWNER_LOCAL_OBSERVATION', 'Requirement', 'Reason', 'Test', 'OPEN') RETURNING id`,
       [oppId],
     );

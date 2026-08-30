@@ -2,8 +2,7 @@ import type { Pool } from 'pg';
 import { getDatabase } from './index';
 
 export const PRODUCTION_TIMEZONE = 'Asia/Bangkok';
-export const DAILY_WATCH_HOUR = 9;
-export const DAILY_WATCH_MINUTE = 15;
+export const DEFAULT_SCHEDULER_DAILY_AT = '09:15';
 
 export type SchedulerEligibility =
   'DISABLED' | 'WAITING_FOR_SCHEDULE' | 'SKIPPED_LATE_START' | 'ELIGIBLE';
@@ -11,7 +10,20 @@ export type SchedulerEligibility =
 export type ProductionSchedulerRuntime = {
   startupBangkokDate: string;
   skippedBangkokDate: string | null;
+  dailyAt: string;
+  dailyMinuteOfDay: number;
 };
+
+export function resolveProductionSchedulerDailyAt(
+  value: string | undefined = process.env.SCHEDULER_DAILY_AT,
+) {
+  const dailyAt = value ?? DEFAULT_SCHEDULER_DAILY_AT;
+  const match = /^(?:([01]\d)|(2[0-3])):([0-5]\d)$/.exec(dailyAt);
+  if (!match) throw new Error('SCHEDULER_DAILY_AT must use 24-hour HH:MM.');
+  const hour = Number(match[1] ?? match[2]);
+  const minute = Number(match[3]);
+  return { dailyAt, minuteOfDay: hour * 60 + minute };
+}
 
 const bangkokClockFormatter = new Intl.DateTimeFormat('en-CA', {
   timeZone: PRODUCTION_TIMEZONE,
@@ -37,14 +49,17 @@ function bangkokClock(now: Date) {
   return { date, minuteOfDay };
 }
 
-const dailyWatchMinuteOfDay = DAILY_WATCH_HOUR * 60 + DAILY_WATCH_MINUTE;
-
-export function createProductionSchedulerRuntime(startedAt: Date = new Date()) {
+export function createProductionSchedulerRuntime(
+  startedAt: Date = new Date(),
+  configuredDailyAt?: string,
+) {
   const startupClock = bangkokClock(startedAt);
+  const schedule = resolveProductionSchedulerDailyAt(configuredDailyAt);
   return {
     startupBangkokDate: startupClock.date,
-    skippedBangkokDate:
-      startupClock.minuteOfDay >= dailyWatchMinuteOfDay ? startupClock.date : null,
+    skippedBangkokDate: startupClock.minuteOfDay >= schedule.minuteOfDay ? startupClock.date : null,
+    dailyAt: schedule.dailyAt,
+    dailyMinuteOfDay: schedule.minuteOfDay,
   } satisfies ProductionSchedulerRuntime;
 }
 
@@ -54,7 +69,7 @@ export function productionSchedulerEligibility(
 ): Exclude<SchedulerEligibility, 'DISABLED'> {
   const clock = bangkokClock(now);
   if (runtime.skippedBangkokDate === clock.date) return 'SKIPPED_LATE_START';
-  if (clock.minuteOfDay < dailyWatchMinuteOfDay) return 'WAITING_FOR_SCHEDULE';
+  if (clock.minuteOfDay < runtime.dailyMinuteOfDay) return 'WAITING_FOR_SCHEDULE';
   return 'ELIGIBLE';
 }
 
@@ -71,6 +86,7 @@ async function recordSchedulerTick(
       JSON.stringify({
         checkedAt: now.toISOString(),
         timezone: PRODUCTION_TIMEZONE,
+        dailyAt: runtime.dailyAt,
         eligibility,
         startupBangkokDate: runtime.startupBangkokDate,
         skippedBangkokDate: runtime.skippedBangkokDate,
@@ -110,7 +126,7 @@ export async function pollProductionScheduler(
     };
   }
 
-  const result = await enqueueDueOpportunityWatches(now, pool);
+  const result = await enqueueDueOpportunityWatches(now, pool, runtime.dailyAt);
   return {
     ...result,
     eligibility,
@@ -121,7 +137,9 @@ export async function pollProductionScheduler(
 export async function enqueueDueOpportunityWatches(
   now: Date = new Date(),
   pool: Pool = getDatabase().pool,
+  configuredDailyAt?: string,
 ) {
+  const schedule = resolveProductionSchedulerDailyAt(configuredDailyAt);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -142,7 +160,7 @@ export async function enqueueDueOpportunityWatches(
        FROM sites s CROSS JOIN clock
        WHERE s.active = true
          AND s.watch_mode IN ('MONITOR_ONLY', 'ANALYSIS_ENABLED', 'CHANGE_ENABLED')
-         AND clock.local_now >= clock.local_date + time '09:15'
+         AND clock.local_now >= clock.local_date + $3::time
            + make_interval(mins => COALESCE(s.stagger_minute, 0))
          AND NOT EXISTS (
            SELECT 1 FROM jobs j
@@ -155,7 +173,7 @@ export async function enqueueDueOpportunityWatches(
              AND (r.created_at AT TIME ZONE $2)::date = clock.local_date
          )
        ORDER BY s.stagger_minute, s.id`,
-      [now.toISOString(), PRODUCTION_TIMEZONE],
+      [now.toISOString(), PRODUCTION_TIMEZONE, schedule.dailyAt],
     );
 
     const jobIds: string[] = [];
@@ -171,6 +189,7 @@ export async function enqueueDueOpportunityWatches(
             scheduleDate: site.local_date,
             scheduleSource: 'DAILY_SCHEDULER',
             timezone: PRODUCTION_TIMEZONE,
+            dailyAt: schedule.dailyAt,
           }),
         ],
       );
@@ -191,6 +210,8 @@ export async function enqueueDueOpportunityWatches(
         JSON.stringify({
           checkedAt: now.toISOString(),
           timezone: PRODUCTION_TIMEZONE,
+          dailyAt: schedule.dailyAt,
+          eligibility: 'ELIGIBLE',
           due: due.rowCount ?? 0,
           enqueued: jobIds.length,
         }),
@@ -220,6 +241,7 @@ export async function recordSchedulerFailure(
 export async function productionHealthSnapshot(
   options: {
     schedulerEnabled?: boolean;
+    schedulerDailyAt?: string;
     expectedMigrationCount?: number;
     staleJobMinutes?: number;
     now?: Date;
@@ -228,6 +250,7 @@ export async function productionHealthSnapshot(
 ) {
   const now = options.now ?? new Date();
   const schedulerEnabled = options.schedulerEnabled ?? process.env.SCHEDULER_ENABLED === 'true';
+  const schedulerDailyAt = resolveProductionSchedulerDailyAt(options.schedulerDailyAt);
   const expectedMigrationCount =
     options.expectedMigrationCount ?? Number(process.env.EXPECTED_MIGRATION_COUNT ?? 24);
   const configuredStaleJobMinutes =
@@ -281,7 +304,7 @@ export async function productionHealthSnapshot(
       healthy: schedulerHealthy,
       heartbeat: schedulerHeartbeat,
       timezone: PRODUCTION_TIMEZONE,
-      dailyAt: '09:15',
+      dailyAt: schedulerDailyAt.dailyAt,
     },
     queue: {
       healthy: queueHealthy,

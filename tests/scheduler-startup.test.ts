@@ -8,6 +8,7 @@ import {
   pollProductionScheduler,
   productionHealthSnapshot,
   productionSchedulerEligibility,
+  resolveProductionSchedulerDailyAt,
 } from '@seo-agent/database';
 import { requireTestDatabaseUrl, resetTestDatabase } from '../packages/database/src/test-safety';
 
@@ -32,6 +33,83 @@ describe('scheduler startup eligibility', () => {
   beforeAll(async () => migrate(database.db, { migrationsFolder: 'packages/database/migrations' }));
   beforeEach(async () => resetTestDatabase(database.pool));
   afterAll(async () => database.pool.end());
+
+  it('uses the configured 14:00 boundary at 13:59:59', () => {
+    const runtime = createProductionSchedulerRuntime(new Date('2026-08-29T05:00:00.000Z'), '14:00');
+    expect(productionSchedulerEligibility(runtime, new Date('2026-08-29T06:59:59.000Z'))).toBe(
+      'WAITING_FOR_SCHEDULE',
+    );
+  });
+
+  it('makes a continuously running worker eligible at the exact 14:00 threshold', () => {
+    const runtime = createProductionSchedulerRuntime(new Date('2026-08-29T05:00:00.000Z'), '14:00');
+    expect(productionSchedulerEligibility(runtime, new Date('2026-08-29T07:00:00.000Z'))).toBe(
+      'ELIGIBLE',
+    );
+  });
+
+  it('enqueues exactly once when a continuous worker crosses the configured 14:00 schedule', async () => {
+    await createSite(
+      { name: 'Custom schedule', url: 'https://custom-schedule.example/' },
+      database.db,
+    );
+    const runtime = createProductionSchedulerRuntime(new Date('2026-08-29T05:00:00.000Z'), '14:00');
+    const before = await pollProductionScheduler(
+      runtime,
+      { enabled: true, now: new Date('2026-08-29T06:59:59.000Z') },
+      database.pool,
+    );
+    const threshold = await pollProductionScheduler(
+      runtime,
+      { enabled: true, now: new Date('2026-08-29T07:00:00.000Z') },
+      database.pool,
+    );
+    const repeated = await pollProductionScheduler(
+      runtime,
+      { enabled: true, now: new Date('2026-08-29T07:01:00.000Z') },
+      database.pool,
+    );
+    expect([before.enqueued, threshold.enqueued, repeated.enqueued]).toEqual([0, 1, 0]);
+    expect(await watchJobCount()).toBe(1);
+  });
+
+  it('skips the Bangkok date when startup occurs after the configured 14:00 schedule', () => {
+    const runtime = createProductionSchedulerRuntime(new Date('2026-08-29T07:00:01.000Z'), '14:00');
+    expect(productionSchedulerEligibility(runtime, new Date('2026-08-29T10:00:00.000Z'))).toBe(
+      'SKIPPED_LATE_START',
+    );
+  });
+
+  it('resets a custom late-start skip on the next Bangkok date', () => {
+    const runtime = createProductionSchedulerRuntime(new Date('2026-08-29T07:00:01.000Z'), '14:00');
+    expect(productionSchedulerEligibility(runtime, new Date('2026-08-30T06:59:59.000Z'))).toBe(
+      'WAITING_FOR_SCHEDULE',
+    );
+    expect(productionSchedulerEligibility(runtime, new Date('2026-08-30T07:00:00.000Z'))).toBe(
+      'ELIGIBLE',
+    );
+  });
+
+  it('rejects invalid daily schedule configuration', () => {
+    for (const value of ['9:15', '24:00', '14:60', '14:00:00', ''])
+      expect(() => resolveProductionSchedulerDailyAt(value)).toThrow(
+        'SCHEDULER_DAILY_AT must use 24-hour HH:MM.',
+      );
+  });
+
+  it('preserves the default 09:15 schedule when configuration is missing', () => {
+    expect(resolveProductionSchedulerDailyAt(undefined)).toEqual({
+      dailyAt: '09:15',
+      minuteOfDay: 555,
+    });
+    const runtime = createProductionSchedulerRuntime(new Date('2026-08-29T01:00:00.000Z'));
+    expect(productionSchedulerEligibility(runtime, new Date('2026-08-29T02:14:59.000Z'))).toBe(
+      'WAITING_FOR_SCHEDULE',
+    );
+    expect(productionSchedulerEligibility(runtime, new Date('2026-08-29T02:15:00.000Z'))).toBe(
+      'ELIGIBLE',
+    );
+  });
 
   it('A: starts before 09:15 and enqueues exactly once when the schedule is crossed', async () => {
     await createSite(

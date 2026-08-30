@@ -10,7 +10,7 @@ import { executeOne, recover } from './runner.js';
 
 const env = envSchema.parse(process.env);
 const { db, pool } = getDatabase();
-const schedulerRuntime = createProductionSchedulerRuntime(new Date());
+const schedulerRuntime = createProductionSchedulerRuntime(new Date(), env.SCHEDULER_DAILY_AT);
 let stopping = false;
 process.on('SIGTERM', () => {
   stopping = true;

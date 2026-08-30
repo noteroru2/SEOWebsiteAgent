@@ -230,6 +230,10 @@ export const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((value) => value === 'true'),
+  SCHEDULER_DAILY_AT: z
+    .string()
+    .regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, 'SCHEDULER_DAILY_AT must use 24-hour HH:MM')
+    .default('09:15'),
   SCHEDULER_POLL_MS: z.coerce.number().int().min(60_000).default(60_000),
   APP_ENCRYPTION_KEY: z.string().optional(),
   GOOGLE_CLIENT_ID: z.string().optional(),

@@ -15,6 +15,8 @@ evidence that the worker or daily scheduler is healthy.
 - Set `SCHEDULER_ENABLED=true` only after confirming there are no queued or running executable
   jobs. The scheduler creates deterministic `PRODUCTION_OPPORTUNITY_WATCH` jobs only; it does not
   call OpenAI or a SERP provider.
+- Set `SCHEDULER_DAILY_AT` in strict 24-hour `HH:MM` form when overriding the default `09:15`.
+  Invalid values fail configuration instead of falling back silently.
 - Keep `EXPECTED_MIGRATION_COUNT` aligned with the migration journal.
 - Keep the source repository mount read-only.
 - PostgreSQL, Web, and Worker use `restart: unless-stopped` so transient host/database failures can
@@ -29,10 +31,10 @@ and exact runtime SHA validity.
 
 ## Daily scheduler
 
-The worker checks due sites at a bounded interval. Each active site becomes due at 09:15
-Asia/Bangkok plus its configured stagger offset. A PostgreSQL advisory lock serializes scheduler
-ticks, and existing watch jobs/runs for the Bangkok calendar date prevent duplicate daily work.
-The scheduler is opt-in and defaults to disabled.
+The worker checks due sites at a bounded interval. Each active site becomes due at
+`SCHEDULER_DAILY_AT` (default `09:15`) Asia/Bangkok plus its configured stagger offset. A PostgreSQL
+advisory lock serializes scheduler ticks, and existing watch jobs/runs for the Bangkok calendar date
+prevent duplicate daily work. The scheduler is opt-in and defaults to disabled.
 
 ## Database backup
 

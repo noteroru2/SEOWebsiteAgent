@@ -6,11 +6,13 @@ import {
   recordWorkerHeartbeat,
 } from '@seo-agent/database';
 import { envSchema } from '@seo-agent/shared';
+import { resourceGuardFromEnv } from '@seo-agent/resource-guard';
 import { executeOne, recover } from './runner.js';
 
 const env = envSchema.parse(process.env);
 const { db, pool } = getDatabase();
 const schedulerRuntime = createProductionSchedulerRuntime(new Date(), env.SCHEDULER_DAILY_AT);
+const heartbeatGuard = resourceGuardFromEnv();
 let stopping = false;
 process.on('SIGTERM', () => {
   stopping = true;
@@ -25,7 +27,22 @@ let nextHeartbeat = 0;
 let nextSchedulerPoll = 0;
 while (!stopping) {
   if (Date.now() >= nextHeartbeat) {
-    await recordWorkerHeartbeat(env.WORKER_ID, db);
+    const resource = await heartbeatGuard.evaluate();
+    await recordWorkerHeartbeat(
+      env.WORKER_ID,
+      {
+        gitSha: env.APP_GIT_SHA,
+        schedulerEnabled: env.SCHEDULER_ENABLED,
+        schedulerDailyAt: schedulerRuntime.dailyAt,
+        schedulerTimezone: 'Asia/Bangkok',
+        executor: {
+          status: resource.allowed ? 'READY' : `BLOCKED_${resource.reasons.join('_')}`,
+          reasons: resource.reasons,
+          snapshot: resource.snapshot,
+        },
+      },
+      db,
+    );
     nextHeartbeat = Date.now() + 30_000;
   }
   if (env.SCHEDULER_ENABLED && Date.now() >= nextSchedulerPoll) {

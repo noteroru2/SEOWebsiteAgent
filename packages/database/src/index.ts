@@ -39,6 +39,7 @@ export function getDatabase() {
 
 export * from './opportunity-watch';
 export * from './production-scheduler';
+export * from './manual-runs';
 
 export async function createSite(input: unknown, database = getDatabase().db) {
   const value = createSiteSchema.parse(input);
@@ -959,10 +960,17 @@ export async function listJobs(database = getDatabase().db) {
     .limit(100);
   return { rows, timingMs: performance.now() - started };
 }
-export async function recordWorkerHeartbeat(workerId: string, database = getDatabase().db) {
-  await database
-    .insert(schema.systemEvents)
-    .values({ source: 'worker', level: 'INFO', event: 'HEARTBEAT', detail: { workerId } });
+export async function recordWorkerHeartbeat(
+  workerId: string,
+  detail: Record<string, unknown> = {},
+  database = getDatabase().db,
+) {
+  await database.insert(schema.systemEvents).values({
+    source: 'worker',
+    level: 'INFO',
+    event: 'HEARTBEAT',
+    detail: { workerId, ...detail },
+  });
 }
 export async function databaseHealthy(pool = getDatabase().pool) {
   try {

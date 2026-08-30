@@ -72,6 +72,9 @@ Reusable owner facts and owner-confirmed browser SERP capture are documented in 
 Production authentication, runtime identity, health semantics, the opt-in daily scheduler, backups,
 and the deployment gate are documented in [docs/production-operations.md](docs/production-operations.md).
 
+Local-only owner commands, Worker-backed execution, runtime source-of-truth, and manual/scheduler
+idempotency are documented in [docs/local-command-center.md](docs/local-command-center.md).
+
 ## Resource model
 
 The eventual host is a Hetzner CX23 (2 vCPU, 4 GB RAM, 40 GB disk) shared with an existing application. The SEO stack must not assume all host resources belong to it. Default container ceilings total 1.75 GB: PostgreSQL 512 MB, web 512 MB and worker 768 MB. The larger worker ceiling accommodates one short-lived Chromium process; only one heavy job runs. See [docs/resource-model.md](docs/resource-model.md).

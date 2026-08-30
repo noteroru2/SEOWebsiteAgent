@@ -3,11 +3,13 @@ import { notFound } from 'next/navigation';
 import {
   aiSpendSummary,
   gscSiteStatus,
+  manualCommandSnapshot,
   siteDetail,
   siteOpportunitySummary,
   siteSourceSummary,
 } from '@seo-agent/database';
-import { displayUtcTimestamp } from '@seo-agent/shared';
+import { RunNowControl } from '../../run-now-control';
+import { displayUtcTimestamp, formatOwnerDomainName } from '@seo-agent/shared';
 import {
   cancelCrawl,
   connectSourceRepositoryAction,
@@ -26,12 +28,13 @@ export default async function SitePage({
 }) {
   const { id } = await params;
   const filters = await searchParams;
-  const [data, gsc, opportunities, aiSpend, source] = await Promise.all([
+  const [data, gsc, opportunities, aiSpend, source, commandState] = await Promise.all([
     siteDetail(id, filters),
     gscSiteStatus(id),
     siteOpportunitySummary(id),
     aiSpendSummary(id),
     siteSourceSummary(id),
+    manualCommandSnapshot(),
   ]);
   if (!data) notFound();
   const summary = (data.latest?.summary ?? {}) as Record<string, unknown>;
@@ -40,7 +43,9 @@ export default async function SitePage({
       <div className="heading">
         <div>
           <div className="eyebrow">Site detail</div>
-          <h1>{data.site.name}</h1>
+          <h1>
+            {formatOwnerDomainName(data.site.name.includes('?') ? data.site.url : data.site.name)}
+          </h1>
           <p className="muted">{data.site.url}</p>
         </div>
         {data.runningJob ? (
@@ -59,6 +64,21 @@ export default async function SitePage({
         <Stat label="Indexable" value={data.latest?.pagesIndexable ?? 0} />
         <Stat label="Issues" value={data.latest?.issuesFound ?? 0} />
       </div>
+      <section className="panel compact section command-center">
+        <div className="heading small">
+          <div>
+            <h2>Manual Command</h2>
+            <p className="hint">
+              สั่ง Opportunity Watch สำหรับเว็บไซต์นี้ผ่าน Worker pipeline ทันที
+            </p>
+          </div>
+          <RunNowControl
+            siteId={id}
+            compact
+            disabledReason={siteManualDisabledReason(data.site, source, commandState)}
+          />
+        </div>
+      </section>
       <section className="panel compact section">
         <div className="heading small">
           <div>
@@ -276,4 +296,20 @@ function Stat({ label, value }: { label: string; value: string | number }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function siteManualDisabledReason(
+  site: { active: boolean; sourceStatus: string },
+  source: { worktree_clean?: boolean | null } | null,
+  state: Awaited<ReturnType<typeof manualCommandSnapshot>>,
+) {
+  if (process.env.LOCAL_MANUAL_COMMANDS_ENABLED !== 'true')
+    return 'Local manual commands are disabled';
+  if (!state.worker.healthy) return 'WORKER_UNAVAILABLE';
+  if (!state.executor.ready) return state.executor.status;
+  if (!site.active) return 'SITE_INACTIVE';
+  if (site.sourceStatus !== 'CURRENT') return 'SOURCE_NOT_CURRENT';
+  if (!source) return 'SOURCE_NOT_CONFIGURED';
+  if (source.worktree_clean !== true) return 'SOURCE_WORKTREE_NOT_CLEAN';
+  return null;
 }

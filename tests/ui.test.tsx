@@ -141,7 +141,8 @@ vi.mock('@seo-agent/database', () => ({
     status: 'HEALTHY',
     gitSha: 'a'.repeat(40),
     versionConfigured: true,
-    worker: { healthy: true, heartbeat: new Date() },
+    worker: { healthy: true, heartbeat: new Date(), state: 'RUNNING', gitSha: 'a'.repeat(40) },
+    executor: { ready: true, status: 'READY', reasons: [], snapshot: null },
     scheduler: {
       enabled: true,
       required: true,
@@ -153,7 +154,33 @@ vi.mock('@seo-agent/database', () => ({
     queue: { healthy: true, queued: 0, running: 0, staleRunning: 0 },
     migrations: { healthy: true, applied: 24, expected: 24 },
     latestWatchRun: null,
+    runtime: { webGitSha: 'a'.repeat(40), workerGitSha: 'a'.repeat(40), mixed: false },
     checkedAt: new Date(),
+  })),
+  manualCommandSnapshot: vi.fn(async () => ({
+    checkedAt: new Date(),
+    worker: { state: 'RUNNING', healthy: true, heartbeat: new Date(), gitSha: 'a'.repeat(40) },
+    executor: { status: 'READY', ready: true, reasons: [], snapshot: null },
+    scheduler: {
+      enabled: true,
+      dailyAt: '10:00',
+      timezone: 'Asia/Bangkok',
+      heartbeat: new Date(),
+      lastEligibility: 'WAITING_FOR_SCHEDULE',
+      lastDue: 0,
+      lastEnqueued: 0,
+    },
+    queue: {
+      queued: 0,
+      running: 0,
+      succeededToday: 0,
+      failedToday: 0,
+      lastClaimAt: null,
+      lastCompletionAt: null,
+    },
+    runtime: { webSha: 'a'.repeat(40), workerSha: 'a'.repeat(40), mixed: false },
+    eligibleSites: 1,
+    recentCommands: [],
   })),
   databaseHealthy: vi.fn(async () => true),
   dashboardTopOpportunities: vi.fn(async () => ({
@@ -341,6 +368,10 @@ describe('server-rendered UI foundations', () => {
     expect(html).toContain('ภาพรวมระบบ SEO Agent');
     expect(html).toContain('สถานะระบบ');
     expect(html).toContain('โอกาส SEO ล่าสุด');
+    expect(html).toContain('Manual Command Center');
+    expect(html).toContain('ทำงานทันที');
+    expect(html).toContain('Executor readiness');
+    expect(html).toContain('Manual Command Center');
   });
   it('renders site list', async () => {
     const Page = (await import('../apps/web/app/sites/page')).default;
@@ -367,6 +398,7 @@ describe('server-rendered UI foundations', () => {
     expect(html).toContain('2026-08-08 00:00:00 UTC');
     expect(html).toContain('Generate Opportunities');
     expect(html).toContain('SEO Opportunities');
+    expect(html).toContain('ตรวจเว็บไซต์นี้ทันที');
   });
   it('renders bounded opportunity overview and deterministic detail', async () => {
     const Overview = (await import('../apps/web/app/opportunities/page')).default;

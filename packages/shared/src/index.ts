@@ -223,6 +223,9 @@ export const verifiedSerpFetchSchema = z.object({
 
 export const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
+  APP_GIT_SHA: z
+    .union([z.string().regex(/^[a-f0-9]{40}$/i), z.literal('development')])
+    .default('development'),
   WORKER_ID: z.string().default('worker-local-1'),
   WORKER_POLL_MS: z.coerce.number().int().min(250).default(2000),
   STALE_JOB_MINUTES: z.coerce.number().int().min(1).default(15),

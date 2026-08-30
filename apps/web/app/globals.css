@@ -566,3 +566,69 @@ td small {
   margin-bottom: 20px;
   font-size: 14px;
 }
+
+.command-center {
+  min-height: auto;
+  border-left: 4px solid #65a30d;
+}
+.command-control {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+.compact-control {
+  justify-items: start;
+}
+.command-reason {
+  max-width: 260px;
+  text-align: right;
+}
+.command-result {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  background: #f0f7e9;
+  border-radius: 8px;
+  font-size: 12px;
+}
+.command-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.command-grid > div {
+  padding: 12px;
+  border: 1px solid #e1e7e2;
+  border-radius: 8px;
+}
+.command-grid span {
+  display: block;
+  color: #718078;
+  font-size: 11px;
+}
+.command-grid strong {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.recent-commands {
+  margin-top: 18px;
+  overflow-x: auto;
+}
+.recent-commands h3 {
+  font-size: 14px;
+}
+.run-id {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+}
+@media (max-width: 800px) {
+  .command-grid {
+    grid-template-columns: 1fr;
+  }
+  .command-control {
+    justify-items: stretch;
+  }
+  .command-reason {
+    text-align: left;
+  }
+}

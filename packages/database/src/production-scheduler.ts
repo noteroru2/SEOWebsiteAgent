@@ -14,9 +14,7 @@ export type ProductionSchedulerRuntime = {
   dailyMinuteOfDay: number;
 };
 
-export function resolveProductionSchedulerDailyAt(
-  value: string | undefined = process.env.SCHEDULER_DAILY_AT,
-) {
+export function resolveProductionSchedulerDailyAt(value?: string) {
   const dailyAt = value ?? DEFAULT_SCHEDULER_DAILY_AT;
   const match = /^(?:([01]\d)|(2[0-3])):([0-5]\d)$/.exec(dailyAt);
   if (!match) throw new Error('SCHEDULER_DAILY_AT must use 24-hour HH:MM.');
@@ -165,7 +163,9 @@ export async function enqueueDueOpportunityWatches(
          AND NOT EXISTS (
            SELECT 1 FROM jobs j
            WHERE j.site_id = s.id AND j.type = 'PRODUCTION_OPPORTUNITY_WATCH'
-             AND (j.created_at AT TIME ZONE $2)::date = clock.local_date
+             AND j.status <> 'CANCELLED'
+             AND COALESCE(j.payload->>'scheduleDate', (j.created_at AT TIME ZONE $2)::date::text)
+               = clock.local_date::text
          )
          AND NOT EXISTS (
            SELECT 1 FROM opportunity_watch_runs r
@@ -250,7 +250,9 @@ export async function productionHealthSnapshot(
 ) {
   const now = options.now ?? new Date();
   const schedulerEnabled = options.schedulerEnabled ?? process.env.SCHEDULER_ENABLED === 'true';
-  const schedulerDailyAt = resolveProductionSchedulerDailyAt(options.schedulerDailyAt);
+  const schedulerDailyAt = resolveProductionSchedulerDailyAt(
+    options.schedulerDailyAt ?? process.env.SCHEDULER_DAILY_AT,
+  );
   const expectedMigrationCount =
     options.expectedMigrationCount ?? Number(process.env.EXPECTED_MIGRATION_COUNT ?? 24);
   const configuredStaleJobMinutes =
@@ -261,8 +263,10 @@ export async function productionHealthSnapshot(
       : 15;
   const result = await pool.query(
     `SELECT
-       (SELECT max(created_at) FROM system_events WHERE source = 'worker' AND event = 'HEARTBEAT') AS worker_heartbeat,
-       (SELECT max(created_at) FROM system_events WHERE source = 'scheduler' AND event = 'SCHEDULER_TICK') AS scheduler_heartbeat,
+       (SELECT created_at FROM system_events WHERE source = 'worker' AND event = 'HEARTBEAT' ORDER BY created_at DESC LIMIT 1) AS worker_heartbeat,
+       (SELECT detail FROM system_events WHERE source = 'worker' AND event = 'HEARTBEAT' ORDER BY created_at DESC LIMIT 1) AS worker_detail,
+       (SELECT created_at FROM system_events WHERE source = 'scheduler' AND event = 'SCHEDULER_TICK' ORDER BY created_at DESC LIMIT 1) AS scheduler_heartbeat,
+       (SELECT detail FROM system_events WHERE source = 'scheduler' AND event = 'SCHEDULER_TICK' ORDER BY created_at DESC LIMIT 1) AS scheduler_detail,
        (SELECT max(created_at) FROM opportunity_watch_runs) AS latest_watch_run,
        (SELECT count(*)::int FROM jobs WHERE status = 'QUEUED') AS queued,
        (SELECT count(*)::int FROM jobs WHERE status = 'RUNNING') AS running,
@@ -274,37 +278,69 @@ export async function productionHealthSnapshot(
     [now.toISOString(), staleJobMinutes],
   );
   const row = result.rows[0] ?? {};
+  const workerDetail = (row.worker_detail ?? {}) as Record<string, unknown>;
+  const schedulerDetail = (row.scheduler_detail ?? {}) as Record<string, unknown>;
   const workerHeartbeat = row.worker_heartbeat ? new Date(row.worker_heartbeat) : null;
   const schedulerHeartbeat = row.scheduler_heartbeat ? new Date(row.scheduler_heartbeat) : null;
   const workerHealthy = Boolean(
     workerHeartbeat && now.getTime() - workerHeartbeat.getTime() <= 90_000,
   );
+  const runtimeSchedulerEnabled =
+    typeof workerDetail.schedulerEnabled === 'boolean'
+      ? workerDetail.schedulerEnabled
+      : schedulerEnabled;
+  const runtimeSchedulerDailyAt =
+    typeof workerDetail.schedulerDailyAt === 'string'
+      ? resolveProductionSchedulerDailyAt(workerDetail.schedulerDailyAt)
+      : typeof schedulerDetail.dailyAt === 'string'
+        ? resolveProductionSchedulerDailyAt(schedulerDetail.dailyAt)
+        : schedulerDailyAt;
   const schedulerHealthy =
-    !schedulerEnabled ||
+    !runtimeSchedulerEnabled ||
     Boolean(schedulerHeartbeat && now.getTime() - schedulerHeartbeat.getTime() <= 180_000);
   const migrationCount = Number(row.migration_count ?? 0);
   const migrationHealthy =
     Number.isInteger(expectedMigrationCount) && migrationCount === expectedMigrationCount;
-  const gitSha = process.env.APP_GIT_SHA?.trim() || 'unknown';
-  const versionConfigured = /^[a-f0-9]{40}$/i.test(gitSha);
+  const webGitSha = process.env.APP_GIT_SHA?.trim() || 'unknown';
+  const workerGitSha = String(workerDetail.gitSha ?? webGitSha);
+  const versionConfigured =
+    /^[a-f0-9]{40}$/i.test(webGitSha) && /^[a-f0-9]{40}$/i.test(workerGitSha);
   const staleRunning = Number(row.stale_running ?? 0);
   const queueHealthy = staleRunning === 0;
+  const executor = (workerDetail.executor ?? {}) as Record<string, unknown>;
+  const executorReady = workerHealthy && executor.status === 'READY';
 
   return {
     status:
       workerHealthy && schedulerHealthy && queueHealthy && migrationHealthy && versionConfigured
         ? 'HEALTHY'
         : 'DEGRADED',
-    gitSha,
+    gitSha: webGitSha,
     versionConfigured,
-    worker: { healthy: workerHealthy, heartbeat: workerHeartbeat },
+    worker: {
+      healthy: workerHealthy,
+      heartbeat: workerHeartbeat,
+      gitSha: workerGitSha,
+      state: workerHealthy ? 'RUNNING' : workerHeartbeat ? 'STALE' : 'STOPPED',
+    },
+    executor: {
+      ready: executorReady,
+      status: executorReady ? 'READY' : String(executor.status ?? 'UNKNOWN'),
+      reasons: Array.isArray(executor.reasons) ? executor.reasons.map(String) : [],
+      snapshot: executor.snapshot ?? null,
+    },
     scheduler: {
-      enabled: schedulerEnabled,
-      required: schedulerEnabled,
+      enabled: runtimeSchedulerEnabled,
+      required: runtimeSchedulerEnabled,
       healthy: schedulerHealthy,
       heartbeat: schedulerHeartbeat,
-      timezone: PRODUCTION_TIMEZONE,
-      dailyAt: schedulerDailyAt.dailyAt,
+      timezone: String(
+        workerDetail.schedulerTimezone ?? schedulerDetail.timezone ?? PRODUCTION_TIMEZONE,
+      ),
+      dailyAt: runtimeSchedulerDailyAt.dailyAt,
+      lastEligibility: schedulerDetail.eligibility ? String(schedulerDetail.eligibility) : null,
+      lastDue: Number(schedulerDetail.due ?? 0),
+      lastEnqueued: Number(schedulerDetail.enqueued ?? 0),
     },
     queue: {
       healthy: queueHealthy,
@@ -318,6 +354,11 @@ export async function productionHealthSnapshot(
       expected: expectedMigrationCount,
     },
     latestWatchRun: row.latest_watch_run ? new Date(row.latest_watch_run) : null,
+    runtime: {
+      webGitSha,
+      workerGitSha,
+      mixed: webGitSha !== 'unknown' && workerGitSha !== 'unknown' && webGitSha !== workerGitSha,
+    },
     checkedAt: now,
   };
 }

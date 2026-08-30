@@ -4,11 +4,13 @@ import {
   dashboardSummary,
   dashboardTopOpportunities,
   databaseHealthy,
+  manualCommandSnapshot,
   ownerDashboardOverview,
   productionHealthSnapshot,
 } from '@seo-agent/database';
 import {
   formatThaiDateTime,
+  formatOwnerDomainName,
   getThaiJobStatus,
   getThaiJobType,
   getThaiOpportunityType,
@@ -16,6 +18,7 @@ import {
   getThaiRecommendation,
 } from '@seo-agent/shared';
 import { enqueueSystemTest } from './actions';
+import { RunNowControl } from './run-now-control';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,6 +29,7 @@ export default async function Dashboard() {
   let aiSpend: Awaited<ReturnType<typeof aiSpendSummary>> | null = null;
   let ownerData: Awaited<ReturnType<typeof ownerDashboardOverview>> | null = null;
   let runtimeHealth: Awaited<ReturnType<typeof productionHealthSnapshot>> | null = null;
+  let commandState: Awaited<ReturnType<typeof manualCommandSnapshot>> | null = null;
   const dashboardErrors: string[] = [];
 
   try {
@@ -57,6 +61,11 @@ export default async function Dashboard() {
     runtimeHealth = await productionHealthSnapshot();
   } catch {
     dashboardErrors.push('runtime_health');
+  }
+  try {
+    commandState = await manualCommandSnapshot();
+  } catch {
+    dashboardErrors.push('command_center');
   }
   dashboardErrors.push(...(ownerData?.errors ?? []));
 
@@ -133,10 +142,77 @@ export default async function Dashboard() {
           </div>
           <div>
             <span style={{ opacity: 0.7 }}>ตรวจครั้งถัดไป: </span>
-            <strong>09:15 น. (Asia/Bangkok)</strong>
+            <strong>
+              {runtimeHealth?.scheduler.dailyAt ?? '—'} น. (
+              {runtimeHealth?.scheduler.timezone ?? 'Asia/Bangkok'})
+            </strong>
           </div>
         </div>
       </div>
+
+      <section className="panel section command-center" data-testid="command-center">
+        <div className="heading small">
+          <div>
+            <div className="eyebrow">Manual Command Center</div>
+            <h2>สั่งตรวจ SEO ทันที</h2>
+            <p className="muted">
+              ส่งงานผ่านคิวให้ Worker ทำงานตาม pipeline จริง โดยไม่รอรอบเวลาอัตโนมัติ
+            </p>
+          </div>
+          <RunNowControl
+            eligibleCount={commandState?.eligibleSites}
+            disabledReason={manualDisabledReason(commandState)}
+          />
+        </div>
+        <div className="command-grid">
+          <CommandFact label="Worker" value={commandState?.worker.state ?? 'UNKNOWN'} />
+          <CommandFact label="Executor" value={commandState?.executor.status ?? 'UNKNOWN'} />
+          <CommandFact
+            label="Queue"
+            value={`${commandState?.queue.queued ?? 0} queued / ${commandState?.queue.running ?? 0} running`}
+          />
+          <CommandFact
+            label="Scheduler"
+            value={
+              commandState?.scheduler.enabled
+                ? `ENABLED · ${commandState.scheduler.dailyAt} ${commandState.scheduler.timezone}`
+                : 'DISABLED'
+            }
+          />
+          <CommandFact
+            label="Runtime"
+            value={commandState?.runtime.mixed ? 'MIXED_RUNTIME' : 'MATCHED'}
+          />
+          <CommandFact label="Eligible sites" value={String(commandState?.eligibleSites ?? 0)} />
+        </div>
+        {commandState?.recentCommands.length ? (
+          <div className="recent-commands">
+            <h3>คำสั่งล่าสุด</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Source</th>
+                  <th>Mode</th>
+                  <th>Run ID</th>
+                  <th>Requested</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {commandState.recentCommands.map((command: Record<string, unknown>) => (
+                  <tr key={String(command.commandRunId)}>
+                    <td>{String(command.commandSource ?? 'MANUAL_OWNER')}</td>
+                    <td>{String(command.mode ?? '—')}</td>
+                    <td className="run-id">{String(command.commandRunId ?? '—')}</td>
+                    <td>{String(command.requested ?? '—')}</td>
+                    <td>{formatThaiDateTime(String(command.requestedAt ?? ''))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </section>
 
       {/* Section 1: งานที่ต้องทำวันนี้ */}
       <section
@@ -304,7 +380,9 @@ export default async function Dashboard() {
                 {ownerData.sitesPortfolio.map((site) => (
                   <tr key={site.id}>
                     <td>
-                      <strong>{site.name}</strong>
+                      <strong>
+                        {formatOwnerDomainName(site.name.includes('?') ? site.url : site.name)}
+                      </strong>
                       <div style={{ fontSize: '0.8rem', opacity: 0.7 }}>{site.url}</div>
                     </td>
                     <td>
@@ -400,6 +478,11 @@ export default async function Dashboard() {
               status={runtimeHealth?.worker.healthy ? 'HEALTHY' : 'STALE'}
             />
             <Health
+              label="Executor readiness"
+              status={runtimeHealth?.executor.ready ? 'HEALTHY' : 'DEGRADED'}
+              text={runtimeHealth?.executor.status}
+            />
+            <Health
               label="คิวงาน"
               status={
                 runtimeHealth?.queue.healthy ? 'HEALTHY' : runtimeHealth ? 'STALE' : 'UNKNOWN'
@@ -430,6 +513,11 @@ export default async function Dashboard() {
               text={
                 runtimeHealth?.gitSha === 'unknown' ? undefined : runtimeHealth?.gitSha.slice(0, 12)
               }
+            />
+            <Health
+              label="Web / Worker runtime"
+              status={runtimeHealth?.runtime.mixed ? 'DEGRADED' : 'HEALTHY'}
+              text={runtimeHealth?.runtime.mixed ? 'MIXED_RUNTIME' : 'MATCHED'}
             />
           </div>
           <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid #333' }}>
@@ -506,6 +594,24 @@ function formatUsd(value: unknown) {
   const num = Number(value ?? 0) / 1_000_000;
   if (num === 0) return '$0.00';
   return `$${num.toFixed(4)}`;
+}
+
+function manualDisabledReason(state: Awaited<ReturnType<typeof manualCommandSnapshot>> | null) {
+  if (process.env.LOCAL_MANUAL_COMMANDS_ENABLED !== 'true')
+    return 'Local manual commands are disabled';
+  if (!state?.worker.healthy) return 'WORKER_UNAVAILABLE';
+  if (!state.executor.ready) return state.executor.status;
+  if (state.eligibleSites === 0) return 'NO_ELIGIBLE_SITE';
+  return null;
+}
+
+function CommandFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
 }
 
 function Stat({ label, value }: { label: string; value: string | number }) {

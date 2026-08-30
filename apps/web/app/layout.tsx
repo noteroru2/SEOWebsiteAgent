@@ -16,7 +16,8 @@ const nav = [
   ['/approvals', 'รออนุมัติ'],
 ] as const;
 export default function Layout({ children }: Readonly<{ children: React.ReactNode }>) {
-  const production = process.env.NODE_ENV === 'production';
+  const localRuntime = process.env.LOCAL_MANUAL_COMMANDS_ENABLED === 'true';
+  const production = process.env.NODE_ENV === 'production' && !localRuntime;
   return (
     <html lang="th">
       <body>

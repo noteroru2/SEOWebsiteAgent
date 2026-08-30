@@ -5,6 +5,119 @@ export const PRODUCTION_TIMEZONE = 'Asia/Bangkok';
 export const DAILY_WATCH_HOUR = 9;
 export const DAILY_WATCH_MINUTE = 15;
 
+export type SchedulerEligibility =
+  'DISABLED' | 'WAITING_FOR_SCHEDULE' | 'SKIPPED_LATE_START' | 'ELIGIBLE';
+
+export type ProductionSchedulerRuntime = {
+  startupBangkokDate: string;
+  skippedBangkokDate: string | null;
+};
+
+const bangkokClockFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: PRODUCTION_TIMEZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+function bangkokClock(now: Date) {
+  const parts = Object.fromEntries(
+    bangkokClockFormatter
+      .formatToParts(now)
+      .filter((part) => part.type !== 'literal')
+      .map((part) => [part.type, part.value]),
+  );
+  const date = `${parts.year}-${parts.month}-${parts.day}`;
+  const minuteOfDay = Number(parts.hour) * 60 + Number(parts.minute);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isInteger(minuteOfDay))
+    throw new Error('Unable to resolve the scheduler clock in Asia/Bangkok.');
+  return { date, minuteOfDay };
+}
+
+const dailyWatchMinuteOfDay = DAILY_WATCH_HOUR * 60 + DAILY_WATCH_MINUTE;
+
+export function createProductionSchedulerRuntime(startedAt: Date = new Date()) {
+  const startupClock = bangkokClock(startedAt);
+  return {
+    startupBangkokDate: startupClock.date,
+    skippedBangkokDate:
+      startupClock.minuteOfDay >= dailyWatchMinuteOfDay ? startupClock.date : null,
+  } satisfies ProductionSchedulerRuntime;
+}
+
+export function productionSchedulerEligibility(
+  runtime: ProductionSchedulerRuntime,
+  now: Date = new Date(),
+): Exclude<SchedulerEligibility, 'DISABLED'> {
+  const clock = bangkokClock(now);
+  if (runtime.skippedBangkokDate === clock.date) return 'SKIPPED_LATE_START';
+  if (clock.minuteOfDay < dailyWatchMinuteOfDay) return 'WAITING_FOR_SCHEDULE';
+  return 'ELIGIBLE';
+}
+
+async function recordSchedulerTick(
+  now: Date,
+  eligibility: Exclude<SchedulerEligibility, 'DISABLED' | 'ELIGIBLE'>,
+  runtime: ProductionSchedulerRuntime,
+  pool: Pool,
+) {
+  await pool.query(
+    `INSERT INTO system_events(source, level, event, detail)
+     VALUES('scheduler', 'INFO', 'SCHEDULER_TICK', $1::jsonb)`,
+    [
+      JSON.stringify({
+        checkedAt: now.toISOString(),
+        timezone: PRODUCTION_TIMEZONE,
+        eligibility,
+        startupBangkokDate: runtime.startupBangkokDate,
+        skippedBangkokDate: runtime.skippedBangkokDate,
+        due: 0,
+        enqueued: 0,
+      }),
+    ],
+  );
+}
+
+export async function pollProductionScheduler(
+  runtime: ProductionSchedulerRuntime,
+  options: { enabled: boolean; now?: Date },
+  pool: Pool = getDatabase().pool,
+) {
+  if (!options.enabled)
+    return {
+      eligibility: 'DISABLED' as const,
+      acquired: false,
+      due: 0,
+      enqueued: 0,
+      jobIds: [] as string[],
+      heartbeatRecorded: false,
+    };
+
+  const now = options.now ?? new Date();
+  const eligibility = productionSchedulerEligibility(runtime, now);
+  if (eligibility !== 'ELIGIBLE') {
+    await recordSchedulerTick(now, eligibility, runtime, pool);
+    return {
+      eligibility,
+      acquired: false,
+      due: 0,
+      enqueued: 0,
+      jobIds: [] as string[],
+      heartbeatRecorded: true,
+    };
+  }
+
+  const result = await enqueueDueOpportunityWatches(now, pool);
+  return {
+    ...result,
+    eligibility,
+    heartbeatRecorded: result.acquired,
+  };
+}
+
 export async function enqueueDueOpportunityWatches(
   now: Date = new Date(),
   pool: Pool = getDatabase().pool,

@@ -1,6 +1,7 @@
 import {
-  enqueueDueOpportunityWatches,
+  createProductionSchedulerRuntime,
   getDatabase,
+  pollProductionScheduler,
   recordSchedulerFailure,
   recordWorkerHeartbeat,
 } from '@seo-agent/database';
@@ -9,6 +10,7 @@ import { executeOne, recover } from './runner.js';
 
 const env = envSchema.parse(process.env);
 const { db, pool } = getDatabase();
+const schedulerRuntime = createProductionSchedulerRuntime(new Date());
 let stopping = false;
 process.on('SIGTERM', () => {
   stopping = true;
@@ -29,7 +31,11 @@ while (!stopping) {
   if (env.SCHEDULER_ENABLED && Date.now() >= nextSchedulerPoll) {
     const checkedAt = new Date();
     try {
-      await enqueueDueOpportunityWatches(checkedAt, pool);
+      await pollProductionScheduler(
+        schedulerRuntime,
+        { enabled: env.SCHEDULER_ENABLED, now: checkedAt },
+        pool,
+      );
     } catch {
       await recordSchedulerFailure(checkedAt, pool);
       console.error('Daily opportunity scheduler failed.');

@@ -1,8 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import {
-  evaluateGoldenPathCandidate,
-  EXCLUDED_PILOT_QUERIES,
-} from '../packages/database/src/opportunity-watch.js';
+import { EXCLUDED_PILOT_QUERIES } from '../packages/database/src/opportunity-watch.js';
 import { ResourceGuard } from '../packages/resource-guard/src/index.js';
 
 describe('Continuous Production Opportunity Watch', () => {

@@ -1,6 +1,5 @@
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
-import { createDatabase, createSite, sites } from '@seo-agent/database';
-import { eq } from 'drizzle-orm';
+import { createDatabase } from '@seo-agent/database';
 
 const { db, pool } = createDatabase();
 try {

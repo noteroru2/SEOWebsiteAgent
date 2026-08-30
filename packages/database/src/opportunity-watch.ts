@@ -1,7 +1,6 @@
 import type { Pool } from 'pg';
 import { createHash } from 'node:crypto';
 import { getDatabase } from './index';
-import { equalGscWindows } from './evidence-resolution';
 import { evaluateAiAnalysisEligibility } from './ai-recommendations';
 import { resourceGuardFromEnv } from '@seo-agent/resource-guard';
 
@@ -86,7 +85,6 @@ export async function evaluateGoldenPathCandidate(
       if (opp.kind === 'UNMAPPED_GSC_PAGE') continue;
 
       const evidence = opp.evidence ?? {};
-      const currentClicks = Number(evidence.currentClicks ?? 0);
       const currentImpressions = Number(evidence.currentImpressions ?? 0);
       const currentPosition = Number(evidence.currentPosition ?? 0);
 
@@ -141,9 +139,9 @@ export async function runOpportunityWatch(
 ) {
   const client = await pool.connect();
   const startedAt = new Date();
-  let gscAction = 'NO_SYNC_NEEDED';
-  let crawlAction = 'REUSE_CURRENT_CRAWL';
-  let opportunityAction = 'REUSE_CURRENT_OPPORTUNITIES';
+  const gscAction = 'NO_SYNC_NEEDED';
+  const crawlAction = 'REUSE_CURRENT_CRAWL';
+  const opportunityAction = 'REUSE_CURRENT_OPPORTUNITIES';
 
   try {
     await client.query('BEGIN');
@@ -200,14 +198,10 @@ export async function runOpportunityWatch(
     );
 
     // 1. Source Freshness Check (Read-Only)
-    const siteRepo = (
-      await client.query(
-        `SELECT head_sha, worktree_clean FROM site_repositories WHERE site_id = $1 LIMIT 1`,
-        [siteId],
-      )
-    ).rows[0];
-
-    const sourceHead = siteRepo?.head_sha ?? 'e42c635108039a44c87533d81581abb1913952ee';
+    await client.query(
+      `SELECT head_sha, worktree_clean FROM site_repositories WHERE site_id = $1 LIMIT 1`,
+      [siteId],
+    );
 
     // 2. Count current active Opportunities
     const activeOppRes = await client.query(

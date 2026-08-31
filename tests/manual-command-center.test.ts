@@ -156,6 +156,27 @@ describe('local manual command center', () => {
     expect(scheduled.enqueued).toBe(0);
   });
 
+  it('does not enqueue a second manual watch after same-day success', async () => {
+    const site = await eligibleSite();
+    const now = new Date('2026-08-31T03:30:00Z');
+    const first = await enqueueManualOpportunityWatch(
+      { mode: 'SITE', siteId: site.id, requestedAt: now },
+      database.pool,
+    );
+    await database.pool.query(`UPDATE jobs SET status='SUCCEEDED',finished_at=$2 WHERE id=$1`, [
+      first.jobIds[0],
+      now,
+    ]);
+    const second = await enqueueManualOpportunityWatch(
+      { mode: 'ALL', requestedAt: now },
+      database.pool,
+    );
+    expect(second).toMatchObject({ enqueued: 0, alreadyCompletedToday: 1 });
+    expect(second.skipped).toContainEqual(
+      expect.objectContaining({ siteId: site.id, reason: 'ALREADY_COMPLETED_TODAY' }),
+    );
+  });
+
   it('serializes a scheduler/manual race and double-clicks to one active job', async () => {
     const site = await eligibleSite();
     const now = new Date('2026-08-31T03:30:00Z');

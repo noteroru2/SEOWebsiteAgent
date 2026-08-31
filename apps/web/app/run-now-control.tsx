@@ -9,6 +9,7 @@ type RunResult = {
   enqueued: number;
   alreadyQueued: number;
   alreadyRunning: number;
+  alreadyCompletedToday: number;
   skipped: Array<{ siteName: string; reason: string }>;
 };
 
@@ -88,7 +89,8 @@ export function RunNowControl({
           <strong>Run ID: {result.runId}</strong>
           <span>
             ขอ {result.requested} · พร้อม {result.eligible} · เข้าคิว {result.enqueued} · มีอยู่แล้ว{' '}
-            {result.alreadyQueued + result.alreadyRunning} · ข้าม {result.skipped.length}
+            {result.alreadyQueued + result.alreadyRunning} · สำเร็จแล้ววันนี้{' '}
+            {result.alreadyCompletedToday} · ข้าม {result.skipped.length}
           </span>
           {status ? (
             <span>

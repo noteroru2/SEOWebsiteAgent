@@ -186,6 +186,7 @@ export async function enqueueManualOpportunityWatch(
       enqueued: 0,
       alreadyQueued: 0,
       alreadyRunning: 0,
+      alreadyCompletedToday: 0,
       skipped: [] as ManualRunSkip[],
       jobIds: [] as string[],
     };
@@ -211,6 +212,24 @@ export async function enqueueManualOpportunityWatch(
         continue;
       }
       result.eligible += 1;
+      const completedToday = await client.query(
+        `SELECT id FROM jobs
+         WHERE site_id=$1 AND type='PRODUCTION_OPPORTUNITY_WATCH'
+           AND status='SUCCEEDED'
+           AND COALESCE(payload->>'scheduleDate',
+             to_char(created_at AT TIME ZONE $2, 'YYYY-MM-DD'))=$3
+         ORDER BY created_at DESC LIMIT 1`,
+        [site.id, PRODUCTION_TIMEZONE, bangkokDate(requestedAt)],
+      );
+      if (completedToday.rows[0]) {
+        result.alreadyCompletedToday += 1;
+        result.skipped.push({
+          siteId: site.id,
+          siteName: site.name,
+          reason: 'ALREADY_COMPLETED_TODAY',
+        });
+        continue;
+      }
       const active = await client.query(
         `SELECT id,status FROM jobs
          WHERE site_id=$1 AND type='PRODUCTION_OPPORTUNITY_WATCH'

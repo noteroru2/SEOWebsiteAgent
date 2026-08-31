@@ -51,10 +51,18 @@ export async function manualCommandSnapshot(
       [PRODUCTION_TIMEZONE],
     ),
     pool.query(
-      `SELECT detail, created_at
-       FROM system_events
-       WHERE source='owner_ui' AND event='MANUAL_RUN_REQUESTED'
-       ORDER BY created_at DESC LIMIT 10`,
+      `SELECT e.detail, e.created_at,
+              count(j.id)::int job_count,
+              count(j.id) FILTER (WHERE j.status='QUEUED')::int queued,
+              count(j.id) FILTER (WHERE j.status='RUNNING')::int running,
+              count(j.id) FILTER (WHERE j.status='SUCCEEDED')::int completed,
+              count(j.id) FILTER (WHERE j.status='FAILED')::int failed,
+              count(j.id) FILTER (WHERE j.status='CANCELLED')::int cancelled
+       FROM system_events e
+       LEFT JOIN jobs j ON j.payload->>'commandRunId'=e.detail->>'commandRunId'
+       WHERE e.source='owner_ui' AND e.event='MANUAL_RUN_REQUESTED'
+       GROUP BY e.id,e.detail,e.created_at
+       ORDER BY e.created_at DESC LIMIT 10`,
     ),
     pool.query(
       `SELECT count(*)::int eligible
@@ -122,10 +130,32 @@ export async function manualCommandSnapshot(
       mixed: webSha !== 'unknown' && workerSha !== 'unknown' && webSha !== workerSha,
     },
     eligibleSites: Number(activity.rows[0]?.eligible ?? 0),
-    recentCommands: recent.rows.map((row) => ({
-      ...(row.detail as Record<string, unknown>),
-      requestedAt: row.created_at,
-    })),
+    recentCommands: recent.rows.map((row) => {
+      const counts = {
+        queued: Number(row.queued ?? 0),
+        running: Number(row.running ?? 0),
+        completed: Number(row.completed ?? 0),
+        failed: Number(row.failed ?? 0),
+        cancelled: Number(row.cancelled ?? 0),
+      };
+      const status = counts.running
+        ? 'RUNNING'
+        : counts.queued
+          ? 'QUEUED'
+          : counts.failed
+            ? 'FAILED'
+            : counts.completed
+              ? 'COMPLETED'
+              : Number(row.job_count ?? 0) === 0
+                ? 'SKIPPED'
+                : 'CANCELLED';
+      return {
+        ...(row.detail as Record<string, unknown>),
+        requestedAt: row.created_at,
+        status,
+        counts,
+      };
+    }),
   };
 }
 

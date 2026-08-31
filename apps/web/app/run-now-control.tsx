@@ -93,10 +93,13 @@ export function RunNowControl({
             {result.alreadyCompletedToday} · ข้าม {result.skipped.length}
           </span>
           {status ? (
-            <span>
-              รอ {status.counts.queued} · ทำงาน {status.counts.running} · สำเร็จ{' '}
-              {status.counts.completed} · ไม่สำเร็จ {status.counts.failed}
-            </span>
+            <>
+              <span>
+                รอ {status.counts.queued} · ทำงาน {status.counts.running} · สำเร็จ{' '}
+                {status.counts.completed} · ไม่สำเร็จ {status.counts.failed}
+              </span>
+              <span>อัปเดตล่าสุด {new Date(status.lastUpdate).toLocaleTimeString('th-TH')}</span>
+            </>
           ) : (
             <span>Preparing / Queued</span>
           )}

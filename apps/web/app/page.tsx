@@ -195,6 +195,9 @@ export default async function Dashboard() {
                   <th>Mode</th>
                   <th>Run ID</th>
                   <th>Requested</th>
+                  <th>Status</th>
+                  <th>Completed</th>
+                  <th>Failed</th>
                   <th>Time</th>
                 </tr>
               </thead>
@@ -205,6 +208,15 @@ export default async function Dashboard() {
                     <td>{String(command.mode ?? '—')}</td>
                     <td className="run-id">{String(command.commandRunId ?? '—')}</td>
                     <td>{String(command.requested ?? '—')}</td>
+                    <td>{String(command.status ?? '—')}</td>
+                    <td>
+                      {String(
+                        (command.counts as Record<string, unknown> | undefined)?.completed ?? 0,
+                      )}
+                    </td>
+                    <td>
+                      {String((command.counts as Record<string, unknown> | undefined)?.failed ?? 0)}
+                    </td>
                     <td>{formatThaiDateTime(String(command.requestedAt ?? ''))}</td>
                   </tr>
                 ))}

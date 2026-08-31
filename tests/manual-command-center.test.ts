@@ -208,6 +208,28 @@ describe('local manual command center', () => {
     expect(snapshot.eligibleSites).toBe(1);
   });
 
+  it('reports recent command progress from the actual jobs', async () => {
+    const site = await eligibleSite();
+    const result = await enqueueManualOpportunityWatch(
+      { mode: 'SITE', siteId: site.id },
+      database.pool,
+    );
+    let snapshot = await manualCommandSnapshot(new Date(), database.pool);
+    expect(snapshot.recentCommands[0]).toMatchObject({
+      commandRunId: result.runId,
+      status: 'QUEUED',
+      counts: { queued: 1, running: 0, completed: 0, failed: 0 },
+    });
+    await database.pool.query(`UPDATE jobs SET status='SUCCEEDED',finished_at=now() WHERE id=$1`, [
+      result.jobIds[0],
+    ]);
+    snapshot = await manualCommandSnapshot(new Date(), database.pool);
+    expect(snapshot.recentCommands[0]).toMatchObject({
+      status: 'COMPLETED',
+      counts: { queued: 0, completed: 1, failed: 0 },
+    });
+  });
+
   it('validates API input, unknown sites, worker availability and resource guard state', async () => {
     await eligibleSite();
     let response = await POST(
